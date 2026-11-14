@@ -1,0 +1,72 @@
+# Pipeline configuration.
+# Data: the FIRMS archive-download zips from the project's Google Drive folder ("Nasa SpaceApps 2026"),
+# global, 13 Nov 2022 - 13 Nov 2026. Put them (or zips containing them) in the folders under [paths].
+# bbox order everywhere is west, south, east, north.
+
+[paths]
+raw = "data/raw"              # optional extra FIRMS CSV files in data/raw/<region_id>/
+zips = ["data/drive", "data/drive_part1"]   # folders holding DL_FIRE_*.zip files
+processed = "data/processed"
+reports = "reports"
+
+[grid]
+cell_deg = 0.1                # shared grid for daily counts
+fine_deg = 0.05               # grid for the "active cell-days" metric
+tile_deg = 1.0                # calibration tile
+
+[cleaning]
+modis_min_confidence = 30
+viirs_keep_confidence = ["n", "h"]
+# Toggle. false = keep only SP type 0 (presumed vegetation fire).
+# true = also count type 1 (volcano), 2 (other static land source), 3 (offshore).
+include_nonveg_types = false
+
+[calibration]
+viirs_era_start = "2012-01"   # harmonized series switches to VIIRS from the first full VIIRS month on/after this
+overlap_start = "2012-01"
+overlap_end = ""              # "" = use all overlap. Set e.g. "2021-12" to exclude the MODIS orbital-drift years.
+terra_fit_start = "2003-01"   # Terra -> Terra+Aqua correction is learned from this window
+terra_fit_end = "2011-12"
+min_pairs = 8                 # minimum tile-months with both sensors > 0 for a fit to be accepted
+max_fit_points = 2000         # Theil-Sen is O(n^2); larger groups are subsampled with a fixed seed
+methods = ["theilsen", "qmap", "ratio"]
+viirs_priority = ["viirs_snpp", "viirs_n20", "viirs_n21"]
+seed = 20261112
+
+[coverage]
+# First day of the supplied archive for each satellite. If a block's first detection falls within
+# `snap_days` after this date, its record is treated as starting here, so a quiet first weeks
+# are not mistaken for missing data.
+snap_days = 60
+[coverage.nominal_start]
+terra = "2022-11-13"          # start of the Drive archive downloads
+aqua = "2022-11-13"
+viirs_snpp = "2022-11-13"
+viirs_n20 = "2022-11-13"
+viirs_n21 = "2023-03-01"      # VERIFY: first NOAA-21 day in the archive (read from the data: 2023-03-01)
+
+[world]
+# The whole world is split into data blocks of this size (degrees). Each block is processed like a
+# region: its own files, its own calibration level between the 1-degree tiles and the global fit.
+block_deg = 30
+
+# Named shortcuts shown in the site's area menu. Selections only; they do not change the processing.
+[presets.world]
+name = "Whole world"
+bbox = [-180.0, -90.0, 180.0, 90.0]
+
+[presets.turkiye_med]
+name = "Türkiye Mediterranean coast (Antalya–Muğla)"
+bbox = [27.0, 35.8, 33.0, 37.9]
+
+[presets.amazon_para_rondonia]
+name = "Brazilian Amazon (Pará / Rondônia)"
+bbox = [-67.0, -14.0, -46.0, 3.0]
+
+[presets.northern_australia]
+name = "Northern Australia"
+bbox = [120.0, -20.0, 146.0, -10.5]
+
+[presets.california]
+name = "California"
+bbox = [-124.5, 32.5, -114.1, 42.1]

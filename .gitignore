@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+# Fire data and everything derived from it (too large for git; rebuilt by the pipeline)
+data/
+reports/
+web/public/data/
+# Node / builds
+node_modules/
+dist/
+# Local only
+share/
+.env
