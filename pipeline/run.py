@@ -35,6 +35,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--last-year", type=int, help="fetch-country: last year (default: current year)")
     parser.add_argument("--folder", default="data/drive", help="import-zips: folder holding DL_FIRE_*.zip files")
     parser.add_argument("--out", default="web/public/data", help="export-static: output folder")
+    parser.add_argument("--keep-hotspots", action="store_true", help="export-static: reuse the detection files already exported")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -46,7 +47,7 @@ def main(argv: list[str] | None = None) -> None:
         import_zips.run(cfg, args.folder)
         return
     if args.command == "export-static":
-        export_static.run(cfg, args.out)
+        export_static.run(cfg, args.out, keep_hotspots=args.keep_hotspots)
         return
     if args.command == "verify-country":
         raise SystemExit(1 if download.verify(cfg, args.regions) else 0)

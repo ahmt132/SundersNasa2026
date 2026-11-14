@@ -253,3 +253,8 @@ td.text { font-family: var(--sans); color: var(--ink2); }
 
 .background-pick { padding: 6px 14px 10px; }
 .section-body > .card + .card { margin-top: 0; }
+
+.range-form { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 8px; align-items: end; padding: 0 12px 12px; }
+.range-form input { font-family: var(--mono); }
+.range-form .small, .range-form .error { grid-column: 1 / -1; padding: 0; }
+@media (max-width: 520px) { .range-form { grid-template-columns: 1fr 1fr; } }

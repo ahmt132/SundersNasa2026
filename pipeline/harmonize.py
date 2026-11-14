@@ -76,6 +76,12 @@ def load_coverage(cfg: Config, regions: list[str]) -> pd.DataFrame:
     cov = cov[cov["region"].isin(regions)].copy()
     cov["first_date"] = pd.to_datetime(cov["first_date"])
     cov["last_date"] = pd.to_datetime(cov["last_date"])
+    if cfg.zips:
+        # Worldwide archive downloads: each satellite's file covers the whole globe, so its observed
+        # period is the same in every block. Taking it per block would turn a block's first or last
+        # *fire* (rare near the poles) into a fake start or end of observation.
+        glob = cov.groupby("series").agg(first_date=("first_date", "min"), last_date=("last_date", "max")).reset_index()
+        cov = pd.DataFrame({"region": regions}).merge(glob, how="cross")
     snap = pd.Timedelta(days=cfg.snap_days)
     newest = cov.groupby("series")["last_date"].transform("max")
     cov.loc[newest - cov["last_date"] <= snap, "last_date"] = newest
@@ -113,12 +119,13 @@ def month_state(cov: pd.DataFrame) -> pd.DataFrame:
 GAP_OTHER_MIN = 50  # detections by another satellite that make a zero month implausible
 
 
-def mark_gaps(state: pd.DataFrame, tiles: pd.DataFrame) -> pd.DataFrame:
+def mark_gaps(state: pd.DataFrame, tiles: pd.DataFrame, year_rule: bool = True) -> pd.DataFrame:
     """Mark months where a satellite's file is missing, so they are 'none' instead of zero fires.
 
     Coverage is first..last date per satellite, so a missing year file in the middle would
     otherwise read as a year without fires. Two rules:
-      - a calendar year in which the satellite has no detection at all in the region;
+      - a calendar year in which the satellite has no detection at all in the region (only for
+        per-region files; worldwide archive files cannot miss one region's year);
       - a month in which it has none while another satellite has GAP_OTHER_MIN or more
         (a missing file or an outage; both mean "not observed", not "no fire"). The other
         satellite is taken from the same instrument family (Terra/Aqua, or the VIIRS trio).
@@ -135,7 +142,7 @@ def mark_gaps(state: pd.DataFrame, tiles: pd.DataFrame) -> pd.DataFrame:
         # so a VIIRS-only month is normal, but Terra 50 vs Aqua 0 is not.
         family = ["terra", "aqua"] if s in ("terra", "aqua") else ["viirs_snpp", "viirs_n20", "viirs_n21"]
         others = c[[f for f in family if f != s]].max(axis=1)
-        gap = observed & ((years[s] == 0) | ((c[s] == 0) & (others >= GAP_OTHER_MIN)))
+        gap = observed & (((years[s] == 0) & year_rule) | ((c[s] == 0) & (others >= GAP_OTHER_MIN)))
         if gap.any():
             st.loc[gap, f"s_{s}"] = "none"
             st.loc[gap, f"d_{s}"] = 0
@@ -181,7 +188,8 @@ def run(cfg: Config, figures: bool = True) -> dict:
         raise SystemExit("[harmonize] no gridded data found - run the ingest and grid stages first")
     regions = sorted(tiles["region"].unique())
     cov = load_coverage(cfg, regions)
-    state = mark_gaps(month_state(cov), tiles)
+    # With global files a block-year without fires is a real zero, not a missing file.
+    state = mark_gaps(month_state(cov), tiles, year_rule=not cfg.zips)
 
     wide = {}
     for metric in METRICS:
@@ -275,9 +283,10 @@ def run(cfg: Config, figures: bool = True) -> dict:
                     return p
             if st["modis"] == "full":
                 return "modis"
-            for p in viirs:
-                if st[p] == "partial":
-                    return p
+            # no satellite covers the whole month: use the VIIRS satellite that covers the most days
+            part = [p for p in viirs if st[p] == "partial"]
+            if part:
+                return max(part, key=lambda p: (row[f"d_{p}"], -viirs.index(p)))
             return "modis" if st["modis"] != "none" else "none"
         if st["modis"] == "full":
             return "modis"

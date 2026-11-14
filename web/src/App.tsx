@@ -17,6 +17,7 @@ interface Data {
 }
 
 const WINDOWS = [{ days: 1, label: "24 HRS" }, { days: 3, label: "3 DAYS" }, { days: 7, label: "7 DAYS" }] as const;
+const MAX_RANGE_DAYS = 92; // individual detections for longer periods are too many to draw; the calendar covers those
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 
 // ---------------------------------------------------------------- small pieces
@@ -115,7 +116,7 @@ export default function App() {
   const [regions, setRegions] = useState<RegionsResponse | null>(null);
   const [data, setData] = useState<Data | null>(null);
   const [cells, setCells] = useState<CellsResponse | null>(null);
-  const [points, setPoints] = useState<PointsResult>({ points: [], truncated: false, zoomIn: false });
+  const [points, setPoints] = useState<PointsResult>({ points: [], total: 0, stride: 1, modis: 0, zoomIn: false });
   const [mapView, setMapView] = useState<View | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
@@ -126,8 +127,12 @@ export default function App() {
   const [layers, setLayers] = useState<Layers>({ viirs: true, modis: true, cells: true, outlines: false, labels: true });
   const [basemap, setBasemap] = useState<Basemap>("sentinel");
   const [imagery, setImagery] = useState<string | null>(null);
-  const [windowDays, setWindowDays] = useState<number>(7);
+  // map window: any two dates (inclusive); the round buttons are shortcuts ending on the latest day
+  const [windowStart, setWindowStart] = useState<string | null>(null);
   const [windowEnd, setWindowEnd] = useState<string | null>(null);
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const [rangeDraft, setRangeDraft] = useState({ from: "", to: "" });
+  const [rangeError, setRangeError] = useState("");
   const [drawMode, setDrawMode] = useState<DrawMode>(null);
   const [nVerts, setNVerts] = useState(0);
   const [cursor, setCursor] = useState<{ lat: number; lon: number } | null>(null);
@@ -140,7 +145,10 @@ export default function App() {
     fetchRegions()
       .then((r) => {
         setRegions(r);
-        setWindowEnd(r.last_day);
+        if (r.last_day) {
+          setWindowEnd(r.last_day);
+          setWindowStart(addDays(r.last_day, -6));
+        }
         if (!view.sel && r.regions.length) {
           const first = r.regions.find((x) => x.id === "world") ?? r.regions[0];
           setView({ sel: { type: "region", id: first.id } });
@@ -183,14 +191,35 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.from, view.to, view.metric, detail]);
 
-  const windowStart = windowEnd ? addDays(windowEnd, -(windowDays - 1)) : null;
+  const windowDays = windowStart && windowEnd ? Math.round((Date.parse(windowEnd) - Date.parse(windowStart)) / 864e5) + 1 : 0;
+  const lastDay = regions?.last_day ?? null;
+  const firstDay = regions ? regions.first_day ?? `${regions.data_range.start}-01` : null;
+  const preset = (days: number) => {
+    if (!lastDay) return;
+    setWindowEnd(lastDay);
+    setWindowStart(addDays(lastDay, -(days - 1)));
+    setRangeOpen(false);
+  };
+  const applyRange = (e: FormEvent) => {
+    e.preventDefault();
+    const { from: a, to: b } = rangeDraft;
+    if (!a || !b) return setRangeError("Choose both dates.");
+    if (a > b) return setRangeError("The start date must be on or before the end date.");
+    if ((firstDay && a < firstDay) || (lastDay && b > lastDay)) return setRangeError(`Data covers ${firstDay} to ${lastDay}.`);
+    if ((Date.parse(b) - Date.parse(a)) / 864e5 + 1 > MAX_RANGE_DAYS)
+      return setRangeError(`Choose at most ${MAX_RANGE_DAYS} days. For longer periods use the burning calendar below.`);
+    setRangeError("");
+    setWindowStart(a);
+    setWindowEnd(b);
+    setRangeOpen(false);
+  };
   useEffect(() => {
     if (!windowEnd || !windowStart) return;
     let live = true;
     fetchPoints(windowStart, windowEnd, mapView).then((r) => live && setPoints(r)).catch(() => undefined);
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [windowStart, windowEnd, windowEnd === regions?.last_day ? "" : mapView?.bounds.map((v) => v.toFixed(1)).join(",")]);
+  }, [windowStart, windowEnd, mapView?.bounds.map((v) => v.toFixed(1)).join(",")]);
 
   const range = regions?.data_range;
   const from = view.from ?? range?.start ?? "2022-11";
@@ -200,8 +229,8 @@ export default function App() {
   const footer = data
     ? `Source: NASA FIRMS, MODIS Collection 6.1 and VIIRS 375 m active fire. Area: ${selLabel}. Pipeline run ${data.meta.pipeline_run_utc.slice(0, 10)}.`
     : "";
-  const nViirs = points.points.filter((p) => p.sat !== "Terra" && p.sat !== "Aqua").length;
-  const nModis = points.points.length - nViirs;
+  const nModis = points.modis;
+  const nViirs = points.total - points.modis;
 
   const flash = (text: string) => {
     setNotice(text);
@@ -317,19 +346,40 @@ export default function App() {
             <div className="panel-scroll">
               <div className="time-row" role="group" aria-label="Hotspots shown on the map">
                 {WINDOWS.map((w) => (
-                  <button key={w.days} type="button" className="round" aria-pressed={windowDays === w.days}
-                    onClick={() => setWindowDays(w.days)}>{w.label}</button>
+                  <button key={w.days} type="button" className="round"
+                    aria-pressed={!rangeOpen && windowEnd === lastDay && windowDays === w.days}
+                    onClick={() => preset(w.days)}>{w.label}</button>
                 ))}
-                <label className="round cal" title="Last day of the map window">
+                <button type="button" className="round cal" aria-pressed={rangeOpen || (windowEnd !== lastDay || !WINDOWS.some((w) => w.days === windowDays))}
+                  aria-expanded={rangeOpen} title="Choose two dates" aria-label="Choose two dates"
+                  onClick={() => {
+                    setRangeDraft({ from: windowStart ?? "", to: windowEnd ?? "" });
+                    setRangeError("");
+                    setRangeOpen((o) => !o);
+                  }}>
                   <Icon d={ICONS.cal} />
-                  <input type="date" aria-label="Last day of the map window" value={windowEnd ?? ""} max={regions?.last_day ?? undefined}
-                    min={regions ? `${regions.data_range.start}-01` : undefined} onChange={(e) => e.target.value && setWindowEnd(e.target.value)} />
-                </label>
+                </button>
                 <div className="time-text">
                   <strong>{windowDays} {windowDays === 1 ? "DAY" : "DAYS"}</strong>
-                  <span>to {windowEnd ?? "–"} UTC{windowEnd === regions?.last_day ? " (latest data)" : ""}</span>
+                  <span>{windowStart === windowEnd ? windowEnd : `${windowStart} → ${windowEnd}`}{windowEnd === lastDay ? " (latest)" : ""}</span>
                 </div>
               </div>
+              {rangeOpen && (
+                <form className="range-form" onSubmit={applyRange}>
+                  <label className="field"><span>From</span>
+                    <input type="date" value={rangeDraft.from} min={firstDay ?? undefined} max={lastDay ?? undefined}
+                      onChange={(e) => setRangeDraft((d) => ({ ...d, from: e.target.value }))} />
+                  </label>
+                  <label className="field"><span>To</span>
+                    <input type="date" value={rangeDraft.to} min={rangeDraft.from || firstDay || undefined} max={lastDay ?? undefined}
+                      onChange={(e) => setRangeDraft((d) => ({ ...d, to: e.target.value }))} />
+                  </label>
+                  <button type="submit" className="primary">Show</button>
+                  <button type="button" onClick={() => setRangeOpen(false)}>Cancel</button>
+                  <p className="small">Any two dates between {firstDay} and {lastDay}, up to {MAX_RANGE_DAYS} days. Ranges outside the last 7 days are drawn for the area on screen, so zoom in to a region first.</p>
+                  {rangeError && <p className="error" role="alert">{rangeError}</p>}
+                </form>
+              )}
 
               <div className="layers">
                 <LayerRow on={layers.viirs} color={POINT_COLORS.viirs} kind="dot" label={`VIIRS (S-NPP, NOAA-20, NOAA-21) [375 m] · ${fmt(nViirs)}`}
@@ -354,7 +404,9 @@ export default function App() {
                     <option value="img:VIIRS_NOAA20_CorrectedReflectance_TrueColor">Satellite image of {windowEnd ?? "the last day"} (VIIRS NOAA-20)</option>
                   </select>
                 </label>
-                {points.truncated && <p className="small">Map shows the first 200,000 detections of this window.</p>}
+                {points.stride > 1 && (
+                  <p className="small">{fmt(points.total)} detections in view: the map draws every {points.stride}th one, spread over the whole window. Zoom in to see all of them.</p>
+                )}
                 {points.zoomIn && <p className="small">Detections before the last 7 days are shown for the area on screen: zoom in to a region (about 60° across or less).</p>}
               </div>
 

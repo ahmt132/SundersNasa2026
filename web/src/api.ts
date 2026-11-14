@@ -72,6 +72,7 @@ export interface RegionInfo {
 
 export interface RegionsResponse {
   data_range: { start: string; end: string };
+  first_day: string | null;
   last_day: string | null;
   regions: RegionInfo[];
   citation: string;
@@ -120,6 +121,7 @@ interface Index {
   predictors: string[];
   sats: string[];
   uncertainty: Record<string, (string | number | null)[]>;
+  coverage: { region: string; series: string; first: string; last: string }[];
   regions: RegionIndex[]; // world blocks that hold data
   presets: { id: string; name: string; bbox: [number, number, number, number] }[];
   map_tiles: { n: number };
@@ -295,6 +297,8 @@ export async function fetchRegions(): Promise<RegionsResponse> {
   const idx = await index();
   return {
     data_range: idx.data_range,
+    // first observed day of any satellite (the month range starts on the 1st of that month)
+    first_day: idx.coverage.length ? idx.coverage.map((c) => c.first).sort()[0] : null,
     last_day: idx.last_day,
     // the area menu lists the named shortcuts; the world blocks stay internal
     regions: idx.presets.map(({ id, name, bbox }) => ({ id, name, bbox, start: idx.data_range.start, end: idx.data_range.end })),
@@ -578,15 +582,33 @@ export interface Point { lon: number; lat: number; sat: string; date: string; ti
 const CONF = (c: number) => (c === 201 ? "low" : c === 202 ? "nominal" : c === 203 ? "high" : String(c));
 const dayText = (year: number, day: number) => new Date(Date.UTC(year, 0, 1 + day)).toISOString().slice(0, 10);
 
-export interface PointsResult { points: Point[]; truncated: boolean; zoomIn: boolean }
+export interface PointsResult {
+  points: Point[];
+  total: number;      // detections in the window and the visible area
+  modis: number;      // of which MODIS (Terra, Aqua); the rest are VIIRS
+  stride: number;     // 1 = all drawn; N = every Nth detection drawn (even sample across the window)
+  zoomIn: boolean;    // older dates need a zoomed-in map
+}
+
+const inView = (v: View | null) => (lon: number, lat: number) =>
+  !v || (lon >= v.bounds[0] && lon <= v.bounds[2] && lat >= v.bounds[1] && lat <= v.bounds[3]);
+
+function thin(all: Point[], cap: number): Pick<PointsResult, "points" | "total" | "stride" | "modis"> {
+  const modis = all.filter((p) => p.sat === "Terra" || p.sat === "Aqua").length;
+  if (all.length <= cap) return { points: all, total: all.length, stride: 1, modis };
+  const stride = Math.ceil(all.length / cap);
+  return { points: all.filter((_, i) => i % stride === 0), total: all.length, stride, modis };
+}
 
 /**
- * Detections between two dates (inclusive, YYYY-MM-DD). The latest days come from small worldwide
- * day files; older dates are read from the world blocks on screen, so they need a zoomed-in map.
+ * Detections between two dates (inclusive, YYYY-MM-DD) inside the visible map area. The latest days
+ * come from small worldwide day files; older dates are read from the world blocks on screen, so
+ * they need a zoomed-in map. Above `cap` points an even sample is drawn and reported.
  */
 export async function fetchPoints(d0: string, d1: string, view: View | null, cap = 200_000): Promise<PointsResult> {
   const idx = await index();
-  const points: Point[] = [];
+  const all: Point[] = [];
+  const keep = inView(view);
   const days: string[] = [];
   for (let d = d0; d <= d1; d = new Date(Date.parse(`${d}T00:00:00Z`) + 864e5).toISOString().slice(0, 10)) days.push(d);
   if (days.every((d) => idx.recent[d] || (idx.last_day && d > idx.last_day))) {
@@ -596,31 +618,29 @@ export async function fetchPoints(d0: string, d1: string, view: View | null, cap
       const buf = await load<ArrayBuffer>(`recent/${d}.bin`, "bin");
       const c = columns(buf, meta.n, [["lat", "i32"], ["lon", "i32"], ["frp", "f32"], ["time", "u16"], ["sat", "u8"], ["conf", "u8"]]);
       for (let i = 0; i < meta.n; i++) {
-        if (points.length >= cap) return { points, truncated: true, zoomIn: false };
-        points.push({ lon: c.lon[i] / 1e5, lat: c.lat[i] / 1e5, sat: idx.sats[c.sat[i]], date: d,
-          time: String(c.time[i]).padStart(4, "0"), frp: c.frp[i], conf: CONF(c.conf[i]) });
+        const lon = c.lon[i] / 1e5, lat = c.lat[i] / 1e5;
+        if (!keep(lon, lat)) continue;
+        all.push({ lon, lat, sat: idx.sats[c.sat[i]], date: d, time: String(c.time[i]).padStart(4, "0"), frp: c.frp[i], conf: CONF(c.conf[i]) });
       }
     }
-    return { points, truncated: false, zoomIn: false };
+    return { ...thin(all, cap), zoomIn: false };
   }
   const blocks = view ? blocksInView(idx, view) : [];
-  if (!view || !blocks.length || blocks.length > MAX_VIEW_BLOCKS) return { points, truncated: false, zoomIn: true };
-  const [w, s, e, n] = view.bounds;
+  if (!view || !blocks.length || blocks.length > MAX_VIEW_BLOCKS) return { points: [], total: 0, stride: 1, modis: 0, zoomIn: true };
   for (const r of blocks) {
     for (const [y, mo] of monthsBetween(d0, d1)) {
       const h = await hotspots(r, y, mo);
       if (!h) continue;
       for (let i = 0; i < h.n; i++) {
         const lon = h.lon[i] / 1e5, lat = h.lat[i] / 1e5;
-        if (lon < w || lon > e || lat < s || lat > n) continue;
+        if (!keep(lon, lat)) continue;
         const date = dayText(y, h.day[i]);
         if (date < d0 || date > d1) continue;
-        if (points.length >= cap) return { points, truncated: true, zoomIn: false };
-        points.push({ lon, lat, sat: idx.sats[h.sat[i]], date, time: String(h.time[i]).padStart(4, "0"), frp: h.frp[i], conf: CONF(h.conf[i]) });
+        all.push({ lon, lat, sat: idx.sats[h.sat[i]], date, time: String(h.time[i]).padStart(4, "0"), frp: h.frp[i], conf: CONF(h.conf[i]) });
       }
     }
   }
-  return { points, truncated: false, zoomIn: false };
+  return { ...thin(all, cap), zoomIn: false };
 }
 
 // ------------------------------------------------------------------ CSV exports
