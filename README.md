@@ -31,26 +31,25 @@ fire record has to cross that seam.
    plain-language reading guides, CSV and Excel downloads and shareable links. All calculations
    run in the browser; there is no server to maintain.
 
-## Results (held-out years, whole world, Nov 2022 – Nov 2026)
+## Results (held-out years, whole world)
 
-| | Raw VIIRS vs MODIS | Harmonized vs MODIS | Correlation |
-|---|---:|---:|---:|
-| S-NPP | +331% | +0.3% | 0.983 |
-| NOAA-20 | +339% | +0.2% | 0.990 |
-| NOAA-21 | +324% | +0.5% | 0.991 |
+| | Years tested | Raw VIIRS vs MODIS | Harmonized vs MODIS | Correlation |
+|---|---:|---:|---:|---:|
+| S-NPP | 2012–2026 | +314% | +1.2% | 0.994 |
+| NOAA-20 | 2018–2026 | +324% | +1.1% | 0.994 |
+| NOAA-21 | 2023–2026 | +324% | +0.5% | 0.991 |
 
-Single months for a single 30° block are less exact (median error ≈ 15–16%). Full tables
+Over 2012–2025 the harmonized world total matches MODIS to 0.1%. Single months for a single
+30° block are less exact (median error ≈ 11–15%). Full tables
 and caveats: **[VALIDATION.md](VALIDATION.md)**. What it can't do: **[LIMITATIONS.md](LIMITATIONS.md)**.
 
 ## Data
 
-All fire data comes from **NASA FIRMS** archive downloads (MODIS Collection 6.1, VIIRS
-375 m Collection 2: S-NPP, NOAA-20, NOAA-21), whole world, **13 Nov 2022 – 13 Nov 2026**:
-250.8 million detections, 223.1 million after cleaning. No other fire data is used, and
-none is made up. How to get the files: [docs/DATA_DOWNLOAD.md](docs/DATA_DOWNLOAD.md).
-
-The pipeline also supports the full 2000–today record (including the Terra-only years
-before Aqua); those parts switch on automatically when older files are added.
+All fire data comes from **NASA FIRMS** (MODIS Collection 6.1, VIIRS 375 m Collection 2:
+S-NPP, NOAA-20, NOAA-21), whole world, **1 Nov 2000 – 13 Nov 2026**: FIRMS yearly country
+archives for 2000–2022 and FIRMS archive downloads from 13 Nov 2022. 662.8 million
+detections, 591.3 million after cleaning and duplicate removal. No other fire data is used,
+and none is made up. How to get the files: [docs/DATA_DOWNLOAD.md](docs/DATA_DOWNLOAD.md).
 
 ## Method in one paragraph
 
@@ -92,8 +91,9 @@ py -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 cd web; npm install; cd ..
 
-# put the FIRMS DL_FIRE_*.zip files in data/drive/, then:
-.venv\Scripts\python -m pipeline.run all --no-figures     # about 1 hour for the whole world
+# put the FIRMS DL_FIRE_*.zip files in data/drive/ and the yearly *_all_countries.zip
+# files in data/drive_part1/, then:
+.venv\Scripts\python -m pipeline.run all --no-figures     # several hours for 2000–2026 on a laptop
 .venv\Scripts\python -m pipeline.run export-static        # writes web/public/data
 cd web; npm run dev                                        # http://localhost:5173
 ```

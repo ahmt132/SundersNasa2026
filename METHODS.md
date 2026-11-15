@@ -3,10 +3,10 @@
 How MODIS and VIIRS active-fire hotspots are merged into one monthly series, and why
 each choice was made. Every threshold named here is a line in `config/pipeline.toml`.
 
-> **Data in the current build.** FIRMS archive downloads for the whole world,
-> 13 Nov 2022 – 13 Nov 2026 (MODIS C6.1, VIIRS S-NPP, NOAA-20, NOAA-21). With these four
-> years only the VIIRS-transfer era (§7) is active; the Terra-only and observed-MODIS eras
-> (§6, §7) switch on automatically when files from before 2012 are added.
+> **Data in the current build.** NASA FIRMS for the whole world, 1 Nov 2000 – 13 Nov 2026
+> (MODIS C6.1, VIIRS S-NPP, NOAA-20, NOAA-21): yearly country archives 2000–2022 and archive
+> downloads from 13 Nov 2022. All three eras are active: Terra-only (Nov 2000 – Jun 2002),
+> observed MODIS (Jul 2002 – 2011) and VIIRS transfer (2012 onwards).
 > **Real validation results** from this data are in [VALIDATION.md](VALIDATION.md);
 > the raw tables are written to `reports/validation_metrics.csv`.
 
@@ -155,8 +155,8 @@ cover: fires neither sensor saw (cloud, smoke, timing), or error in observed-MOD
 
 ## 9. Known gaps in this method
 
-- With the current four-year build, leave-one-year-out has only four years to work with;
-  the test becomes much stronger with the full 2012–today overlap.
+- Leave-one-year-out has 15 years for S-NPP but only 4 for NOAA-21 (launched 2022), so
+  NOAA-21's conversion is the least tested.
 - The transfer assumes the VIIRS:MODIS relationship learned in the overlap holds
   afterwards. Terra and Aqua have drifted to later/earlier overpass times in recent
   years, which changes what MODIS sees. Set `overlap_end` (e.g. `"2021-12"`) to fit on
