@@ -101,6 +101,8 @@ interface Props {
   onView: (view: View) => void;
   onClear: () => void;
   finishRef: { current: () => void };
+  /** Filled in by the map: call it to zoom to the selected area again. */
+  fitAreaRef?: { current: () => void };
   /** While true, report once the map has drawn the current points and finished loading (loading screen). */
   awaitDrawn?: boolean;
   onDrawn?: () => void;
@@ -257,6 +259,7 @@ export function MapView(p: Props) {
       props.current.onDrawEnd();
     };
     props.current.finishRef.current = finish;
+    if (props.current.fitAreaRef) props.current.fitAreaRef.current = () => fitRef.current();
     const dbl = (e: MapMouseEvent) => {
       if (modeRef.current !== "poly") return;
       e.preventDefault();
