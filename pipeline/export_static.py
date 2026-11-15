@@ -27,6 +27,9 @@ N per file is in index.json. Layouts (column: type):
                             (cx = tx // 5, cy = ty // 5). Header nr:u32 nh:u32, then
                             raw  m:u16 tx:u16 ty:u16 s:u8 n:u32 cd:u32  (nr rows)
                             h    m:u16 tx:u16 ty:u16 hc:f32 hd:f32       (nh rows)
+  days/<YYYY>/<YYYY-MM-DD>.bin  map dots when zoomed out: an even random sample of at most DAY_SAMPLE
+                            detections of that day, whole world. Header n:u32 total:u32 modis:u32 0:u32
+                            (n sampled, the day's real total and real MODIS count), then the recent/ layout
   r/<region>/ac/<tx>_<ty>.bin  custom areas: the 0.1 deg cells of one 1 deg tile, same header, then
                             cells_raw layout (nr rows) and cells_h layout (nh rows)
   recent/<d>.bin lat:i32 lon:i32 frp:f32 time:u16 sat:u8 conf:u8
@@ -51,6 +54,7 @@ from .config import duck_connect, SERIES, Config
 
 SATS = ["Terra", "Aqua", "SNPP", "NOAA20", "NOAA21"]
 RECENT_DAYS = 7
+DAY_SAMPLE = 20_000  # detections per day in the zoomed-out dot files (days/)
 PREDICTORS = ["modis", "terra", "aqua", "viirs_snpp", "viirs_n20", "viirs_n21"]
 CITATION = (
     "Data: NASA FIRMS (Fire Information for Resource Management System), part of NASA LANCE/ESDIS - "
@@ -383,3 +387,59 @@ def export_areas(cfg: Config, out: str) -> None:
     con.close()
     (out_dir / "index.json").write_text(json.dumps(index, separators=(",", ":")), "utf-8")
     print(f"[export-areas] wrote {files:,} area files ({total / 1e6:.1f} MB)")
+    export_days(cfg, out)
+
+
+def export_days(cfg: Config, out: str) -> None:
+    """Worldwide daily dot samples for the zoomed-out map (see module docstring). The sample is
+    random but repeatable (rows ordered by a hash of position and time), so it is spread evenly over
+    the day's fires; the header keeps the real totals so the site can estimate counts in view."""
+    out_dir = Path(out)
+    index = json.loads((out_dir / "index.json").read_text("utf-8"))
+    ddir = out_dir / "days"
+    shutil.rmtree(ddir, ignore_errors=True)
+    con = duck_connect()
+    hsrc = f"read_parquet('{(cfg.processed / 'hotspots').as_posix()}/*/*/*.parquet', hive_partitioning=true)"
+    years = [y for (y,) in con.execute(f"SELECT DISTINCT year FROM {hsrc} ORDER BY 1").fetchall()]
+    sat_code = {v: i for i, v in enumerate(SATS)}
+    total, files = 0, 0
+    for year in years:
+        counts = {str(d)[:10]: (int(n), int(m)) for d, n, m in con.execute(
+            f"SELECT acq_date, count(*), count(*) FILTER (WHERE satellite IN ('Terra', 'Aqua')) FROM {hsrc} "
+            f"WHERE year = {int(year)} GROUP BY 1").fetchall()}
+        # one month at a time: a whole VIIRS-era year does not fit the memory cap in one window sort
+        d = pd.concat([con.execute(
+            f"SELECT latitude, longitude, frp, acq_date, acq_time, satellite, confidence FROM {hsrc} "
+            f"WHERE year = {int(year)} AND month(acq_date) = {mon} "
+            f"QUALIFY row_number() OVER (PARTITION BY acq_date ORDER BY hash(latitude, longitude, acq_time, satellite)) <= {DAY_SAMPLE}"
+        ).df() for mon in range(1, 13)], ignore_index=True)
+        d["acq_date"] = pd.to_datetime(d["acq_date"]).dt.strftime("%Y-%m-%d")
+        (ddir / str(year)).mkdir(parents=True, exist_ok=True)
+        for day, p in d.groupby("acq_date"):
+            p = p.sort_values("acq_time")
+            conf = p["confidence"].astype(str).str.lower()
+            conf_code = np.where(conf.str[0] == "l", 201, np.where(conf.str[0] == "n", 202, np.where(conf.str[0] == "h", 203,
+                                 pd.to_numeric(conf, errors="coerce").fillna(0).clip(0, 100)))).astype(np.uint8)
+            n_all, n_modis = counts[day]
+            path = ddir / str(year) / f"{day}.bin"
+            with open(path, "wb") as fh:
+                fh.write(np.array([len(p), n_all, n_modis, 0], np.uint32).tobytes())
+            cols = [np.round(p["latitude"].to_numpy() * 1e5).astype(np.int32),
+                    np.round(p["longitude"].to_numpy() * 1e5).astype(np.int32),
+                    p["frp"].to_numpy(np.float32),
+                    pd.to_numeric(p["acq_time"], errors="coerce").fillna(0).to_numpy(np.uint16),
+                    p["satellite"].map(sat_code).to_numpy(np.uint8), conf_code]
+            with open(path, "ab") as fh:
+                for col in cols:
+                    data = np.ascontiguousarray(col).tobytes()
+                    fh.write(data)
+                    pad = (-len(data)) % 4
+                    if pad:
+                        fh.write(bytes(pad))
+            total += path.stat().st_size
+            files += 1
+        print(f"[export-days] {year}: {d['acq_date'].nunique()} days", flush=True)
+    con.close()
+    index["day_sample"] = {"cap": DAY_SAMPLE, "files": files}
+    (out_dir / "index.json").write_text(json.dumps(index, separators=(",", ":")), "utf-8")
+    print(f"[export-days] wrote {files:,} day files ({total / 1e6:.1f} MB)")

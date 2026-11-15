@@ -16,7 +16,7 @@ from .config import load_config
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="pipeline.run", description="MODIS + VIIRS hotspot harmonization")
-    parser.add_argument("command", choices=["all", "ingest", "grid", "harmonize", "export-static", "export-map", "export-areas"])
+    parser.add_argument("command", choices=["all", "ingest", "grid", "harmonize", "export-static", "export-map", "export-areas", "export-days"])
     parser.add_argument("--config", default="config/pipeline.toml")
     parser.add_argument("--regions", nargs="*", help="region ids (default: all regions in the config)")
     parser.add_argument("--no-figures", action="store_true", help="skip validation figures")
@@ -29,6 +29,9 @@ def main(argv: list[str] | None = None) -> None:
     if unknown:
         parser.error(f"unknown region(s) {sorted(unknown)}; configured: {sorted(cfg.regions)}")
 
+    if args.command == "export-days":
+        export_static.export_days(cfg, args.out)
+        return
     if args.command == "export-areas":
         export_static.export_areas(cfg, args.out)
         return

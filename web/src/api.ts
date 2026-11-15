@@ -119,6 +119,7 @@ interface Index {
   regions: RegionIndex[]; // world blocks that hold data
   map_tiles: { n: number };
   map_tiles_all?: { n: number };
+  day_sample?: { cap: number; files: number }; // days/<YYYY>/<date>.bin, see fetchPoints
   map_tiles_y?: { n: number };
   map_tiles_m?: Record<string, { n: number }>;
   recent: Record<string, { n: number }>;
@@ -845,6 +846,7 @@ export interface PointsResult {
   modis: number;      // of which MODIS (Terra, Aqua); the rest are VIIRS
   stride: number;     // 1 = all drawn; N = every Nth detection drawn (even sample across the window)
   zoomIn: boolean;    // older dates need a zoomed-in map
+  sampled?: boolean;  // zoomed out on older dates: dots are a daily sample, total and modis are estimates
 }
 
 const inView = (v: View | null) => (lon: number, lat: number) =>
@@ -883,7 +885,32 @@ export async function fetchPoints(d0: string, d1: string, view: View | null, cap
     return { ...thin(all, cap), zoomIn: false };
   }
   const blocks = view ? blocksInView(idx, view) : [];
-  if (!view || !blocks.length || blocks.length > MAX_VIEW_BLOCKS) return { points: [], total: 0, stride: 1, modis: 0, zoomIn: true };
+  if (!view || !blocks.length || blocks.length > MAX_VIEW_BLOCKS) {
+    if (!idx.day_sample) return { points: [], total: 0, stride: 1, modis: 0, zoomIn: true };
+    // Zoomed out on older dates: each day's worldwide random sample (at most day_sample.cap dots).
+    // Counts in view are estimated from the sample with the day's real totals (file header).
+    let estTotal = 0, estModis = 0;
+    const loaded = await Promise.all(days.map((d) =>
+      load<ArrayBuffer>(`days/${d.slice(0, 4)}/${d}.bin`, "bin").then((buf) => ({ d, buf })).catch(() => null)));
+    for (const f of loaded) {
+      if (!f) continue;
+      const [n, dayTotal] = new Uint32Array(f.buf, 0, 4);
+      if (!n) continue;
+      const scale = dayTotal / n;
+      const c = columns(f.buf, n, [["lat", "i32"], ["lon", "i32"], ["frp", "f32"], ["time", "u16"], ["sat", "u8"], ["conf", "u8"]], 16);
+      for (let i = 0; i < n; i++) {
+        const lon = c.lon[i] / 1e5, lat = c.lat[i] / 1e5;
+        if (!keep(lon, lat)) continue;
+        const sat = idx.sats[c.sat[i]];
+        estTotal += scale;
+        if (sat === "Terra" || sat === "Aqua") estModis += scale;
+        all.push({ lon, lat, sat, date: f.d, time: String(c.time[i]).padStart(4, "0"), frp: c.frp[i], conf: CONF(c.conf[i]) });
+      }
+    }
+    const shown = thin(all, cap).points;
+    const total = Math.round(estTotal);
+    return { points: shown, total, modis: Math.round(estModis), stride: Math.max(1, Math.round(total / Math.max(shown.length, 1))), zoomIn: false, sampled: true };
+  }
   const jobs = blocks.flatMap((r) => monthsBetween(d0, d1).map(([y, mo]) => ({ y, h: hotspots(r, y, mo, d0, d1, MAP_COLS) })));
   for (const job of jobs) {
     const h = await job.h; // all files download at the same time; results are read in order

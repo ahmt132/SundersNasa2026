@@ -252,7 +252,9 @@ export default function App() {
     : cells == null ? "Loading the world fire grid"
     : !pointsReady ? `Loading fire detections, ${windowDays} days`
     : !data ? "Preparing the burning calendar"
-    : `Drawing ${points.total.toLocaleString("en-US")} fire detections`;
+    : points.points.length < points.total
+      ? `Drawing ${points.points.length.toLocaleString("en-US")} of ${points.total.toLocaleString("en-US")} fire detections`
+      : `Drawing ${points.total.toLocaleString("en-US")} fire detections`;
 
   const range = regions?.data_range;
   const from = view.from ?? range?.start ?? "2000-11";
@@ -397,10 +399,10 @@ export default function App() {
                 </form>
               )}
               <div className="layers">
-                <LayerRow on={layers.viirs} color={POINT_COLORS.viirs} kind="dot" label={`VIIRS detections · ${fmt(nViirs)}`}
+                <LayerRow on={layers.viirs} color={POINT_COLORS.viirs} kind="dot" label={`VIIRS detections · ${points.sampled ? "≈" : ""}${fmt(nViirs)}`}
                   hint="Each dot is one VIIRS 375 m detection (S-NPP, NOAA-20, NOAA-21; nominal or high confidence). Click a dot for details."
                   onClick={() => setLayers((l) => ({ ...l, viirs: !l.viirs }))} />
-                <LayerRow on={layers.modis} color={POINT_COLORS.modis} kind="ring" label={`MODIS detections · ${fmt(nModis)}`}
+                <LayerRow on={layers.modis} color={POINT_COLORS.modis} kind="ring" label={`MODIS detections · ${points.sampled ? "≈" : ""}${fmt(nModis)}`}
                   hint="Each ring is one MODIS 1 km detection (Terra and Aqua; confidence 30 or more)."
                   onClick={() => setLayers((l) => ({ ...l, modis: !l.modis }))} />
                 <LayerRow on={layers.cells} color="#f98e09" kind="grid" label={`Total fire per ${cells?.cell_deg === 1 ? "1°" : "0.1°"} square`}
@@ -419,7 +421,9 @@ export default function App() {
                     <option value="img:VIIRS_NOAA20_CorrectedReflectance_TrueColor">Satellite image of {windowEnd ?? "the last day"} (VIIRS NOAA-20)</option>
                   </select>
                 </label>
-                {points.stride > 1 && (
+                {points.sampled ? (
+                  <p className="small">About {fmt(points.total)} detections in view. Zoomed out, older dates show an even sample of each day's detections (counts estimated from it). Zoom in to a region to see all of them.</p>
+                ) : points.stride > 1 && (
                   <p className="small">{fmt(points.total)} detections in view: the map draws every {points.stride}th one. Zoom in to see all of them.</p>
                 )}
                 {points.zoomIn && <p className="small">Detections before the last 7 days are shown for the area on screen: zoom in to a region (about 60° across or less).</p>}

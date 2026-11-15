@@ -414,6 +414,22 @@ export function MapView(p: Props) {
     }))));
   }, [ready, p.points]);
 
+  // Dot size follows how many dots are drawn: up to 20,000 keep the full size; more get smaller
+  // (down to 45%) and slightly see-through, so a dense fire region reads as dense, not as one red sheet.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    const n = p.points.length;
+    const f = Math.max(0.45, Math.min(1, Math.sqrt(20_000 / Math.max(n, 1))));
+    const dense = n > 50_000;
+    map.setPaintProperty("points-viirs", "circle-radius", ["interpolate", ["linear"], ["zoom"], 3, 1.6 * f, 8, 3.2 * f, 12, 5 * f]);
+    map.setPaintProperty("points-viirs", "circle-opacity", dense ? 0.75 : 1);
+    map.setPaintProperty("points-viirs", "circle-stroke-width", dense ? 0 : 0.6);
+    map.setPaintProperty("points-modis", "circle-radius", ["interpolate", ["linear"], ["zoom"], 3, 2.5 * f, 8, 5 * f, 12, 8 * f]);
+    map.setPaintProperty("points-modis", "circle-stroke-width", 1.6 * Math.max(f, 0.6));
+    map.setPaintProperty("points-modis", "circle-stroke-opacity", dense ? 0.75 : 1);
+  }, [ready, p.points.length]);
+
   // Report once the points set by the effect above are processed and on screen. This waits for
   // the "points" source itself, not for the whole map: map.loaded()/"idle" also wait on hidden
   // raster sources and do not fire reliably here. Two animation frames = drawn at least once.
