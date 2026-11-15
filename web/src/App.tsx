@@ -6,7 +6,7 @@ import {
 import { BootScreen } from "./components/BootScreen";
 import { Calendar } from "./components/Calendar";
 import { AnnualTotals, SeasonalProfile, SensorPanel } from "./components/Charts";
-import { FullGuide, GUIDES, TAB_LABELS, type ResultTab } from "./components/Guide";
+import { MethodText, TAB_LABELS, type ResultTab } from "./components/Method";
 import { BASEMAPS, MapView, POINT_COLORS, type Basemap, type DrawMode, type Layers } from "./components/MapView";
 import { MONTHS, fmt, monthLabel, selectionLabel } from "./lib";
 import { useViewState } from "./state";
@@ -121,7 +121,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 
 // ---------------------------------------------------------------- app
 // Layout: top bar; left = controls (map days and layers, area, period and downloads); centre = map;
-// under the map = results (burning calendar and charts, each with a "how to read" guide beside it).
+// under the map = results (burning calendar and charts).
 
 export default function App() {
   const [view, setView] = useViewState();
@@ -151,7 +151,7 @@ export default function App() {
   const [cursor, setCursor] = useState<{ lat: number; lon: number } | null>(null);
   const [point, setPoint] = useState({ lat: "", lon: "", km: "25" });
   const [formError, setFormError] = useState("");
-  const [modal, setModal] = useState<null | "about" | "guide" | "contact">(null);
+  const [modal, setModal] = useState<null | "about" | "method" | "contact">(null);
   const finishRef = useRef<() => void>(() => undefined);
   const [pointsReady, setPointsReady] = useState(false);
   const [drawn, setDrawn] = useState(false);
@@ -328,12 +328,12 @@ export default function App() {
           <img className="mark" src="./brand/planet-logo-v2.png" alt="" width={38} height={38} />
           <div>
             <div className="brand-name">Burning Calendar</div>
-            <div className="brand-sub">One fire record from two generations of NASA satellites · NASA Space Apps Challenge 2026 · team Sunders</div>
+            <div className="brand-sub">NASA Space Apps Challenge 2026 · team Sunders</div>
           </div>
         </div>
         <nav className="top-links" aria-label="Site">
           <button type="button" onClick={() => setModal("about")}><Icon d={ICONS.info} /> <span>About</span></button>
-          <button type="button" onClick={() => setModal("guide")}><Icon d={ICONS.book} /> <span>How to read</span></button>
+          <button type="button" onClick={() => setModal("method")}><Icon d={ICONS.book} /> <span>How it works</span></button>
           <button type="button" onClick={() => setModal("contact")}><Icon d={ICONS.mail} /> <span>Contact</span></button>
           <button type="button" onClick={share}><Icon d={ICONS.link} /> <span>Share link</span></button>
         </nav>
@@ -350,7 +350,7 @@ export default function App() {
                 <p>NASA&apos;s older MODIS and newer VIIRS satellites see the same fires very differently: VIIRS reports about four times more hotspots. This site converts both into one consistent unit, so fire activity can be compared across places and years.</p>
                 <p className="intro-links">
                   <button type="button" className="link" onClick={() => setModal("about")}>About the project</button>
-                  <button type="button" className="link" onClick={() => setModal("guide")}>How to read the site</button>
+                  <button type="button" className="link" onClick={() => setModal("method")}>How the harmonization works</button>
                 </p>
               </div>
             )}
@@ -560,10 +560,6 @@ export default function App() {
                       <SensorPanel months={data.months} unitShort={unitShort} footer={footer} agg={view.agg} onAgg={(agg) => setView({ agg })} />
                     )}
                   </div>
-                  <aside className="result-guide" aria-label={GUIDES[tab].title}>
-                    <h3>{GUIDES[tab].title}</h3>
-                    {GUIDES[tab].body}
-                  </aside>
                 </div>
               )}
             </div>
@@ -584,9 +580,9 @@ export default function App() {
           <p>This is an independent NASA Space Apps Challenge project, not an official NASA product.</p>
         </Modal>
       )}
-      {modal === "guide" && (
-        <Modal title="How to read this site" onClose={() => setModal(null)}>
-          <FullGuide />
+      {modal === "method" && (
+        <Modal title="How the harmonization works" onClose={() => setModal(null)}>
+          <MethodText />
         </Modal>
       )}
       {modal === "contact" && (

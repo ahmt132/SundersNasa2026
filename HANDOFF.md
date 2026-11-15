@@ -32,7 +32,7 @@ Online: page on Cloudflare Pages, data on Cloudflare R2 – follow `docs/DEPLOY_
 
 ## Where things stand
 - Done: worldwide pipeline (30° world blocks), harmonization with leave-one-year-out validation,
-  static website (controls on the left, map, results with reading guides under the map; 25 quick areas), CSV exports, share links, Cloudflare deployment (Pages + R2).
+  static website (controls on the left, map, results under the map; "How it works" window; 25 quick areas), CSV exports, share links, Cloudflare deployment (Pages + R2).
 - Phase 4 docs written on 15 Nov 2026, then updated the same day for the 2000–2026 build
   (VALIDATION.md tables recomputed; items marked VERIFY there were not recomputed).
 - Speed/size settings: DuckDB memory cap `BURNCAL_DUCKDB_MEMORY` (default 6GB); validation folds

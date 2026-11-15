@@ -28,7 +28,7 @@ fire record has to cross that seam.
    areas (continents and well-known fire regions), a rectangle, a polygon or a point with a
    radius. Each square shows its value; a "compared with usual" mode shows how each month differs
    from the same month in other years. Charts (seasonal profile, year by year, MODIS vs VIIRS),
-   plain-language reading guides, CSV and Excel downloads and shareable links. All calculations
+   a plain-language "How it works" window, CSV and Excel downloads and shareable links. All calculations
    run in the browser; there is no server to maintain.
 
 ## Results (held-out years, whole world)
@@ -78,7 +78,7 @@ web/                      website (React, TypeScript, Vite, MapLibre)
   src/api.ts              all calculations, in the browser
   src/App.tsx             layout: controls (left), map, results under the map
   src/areas.ts            the quick areas in the area menu
-  src/components/         map, calendar, charts, reading guides, loading screen
+  src/components/         map, calendar, charts, "How it works" text, loading screen
 scripts/                  upload data to Cloudflare R2
 docs/                     data download, deployment
 tests/                    pytest (uses clearly labelled synthetic data only)

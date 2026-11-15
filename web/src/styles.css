@@ -185,7 +185,7 @@ input { width: 100%; font-family: var(--mono); }
 .message { margin: 12px; border: 1px solid var(--hairline); border-left: 3px solid var(--ink2); background: var(--card); padding: 12px 14px; border-radius: 3px; }
 .message p { color: var(--ink2); margin-top: 4px; }
 .loading { color: var(--ink2); padding: 16px 12px; }
-.result-grid { transition: opacity 120ms; display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 340px); gap: 14px; align-items: start; }
+.result-grid { transition: opacity 120ms; }
 .result-grid.stale { opacity: 0.45; }
 .panel-note { font-size: 12px; color: var(--ink2); padding: 12px 14px 16px; border-top: 1px solid #0d1122; }
 .panel-note strong { color: #e2b13c; }
@@ -202,16 +202,14 @@ input { width: 100%; font-family: var(--mono); }
 .results-where strong { color: var(--ink); font-weight: 600; }
 .results-period { color: var(--ink3); }
 .results-body { overflow-y: auto; max-height: 38vh; padding: 10px 12px; }
-.result-guide { background: var(--card); border: 1px solid var(--hairline); border-left: 3px solid var(--accent); border-radius: 3px;
-  padding: 12px 14px; font-size: 14px; color: var(--ink2); display: flex; flex-direction: column; gap: 8px; }
-.result-guide h3, .modal-body h3 { font-size: 15px; color: var(--ink); margin: 0; }
-.result-guide ul, .modal-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
-.result-guide p, .modal-body p { margin: 0; }
-.result-guide strong, .modal-body li strong { color: var(--ink); }
+.modal-body h3 { font-size: 15px; color: var(--ink); margin: 0; }
+.modal-body ul, .modal-body ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
+.modal-body p { margin: 0; }
+.modal-body li strong { color: var(--ink); }
 .modal-body h3 { margin-top: 6px; }
 .contact-list { list-style: none; padding-left: 0 !important; }
 .contact-list li { display: flex; align-items: center; gap: 8px; font-size: 15px; }
-.modal-body a, .result-guide a { color: #9cb8ff; }
+.modal-body a { color: #9cb8ff; }
 
 /* ---------- chart cards */
 .card { background: var(--card); border: 1px solid var(--hairline); border-radius: 3px; padding: 12px 12px 8px; min-width: 0; }
@@ -240,10 +238,6 @@ input { width: 100%; font-family: var(--mono); }
 .modal h2 { font-size: 16px; font-weight: 500; }
 .modal-body { padding: 14px 16px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; color: var(--ink2); font-size: 15px; }
 
-/* ---------- medium screens: the guide goes under the chart */
-@media (max-width: 1250px) {
-  .result-grid { grid-template-columns: minmax(0, 1fr); }
-}
 /* ---------- narrow screens: one column (map, results, controls); the page scrolls */
 @media (max-width: 860px) {
   html, body, #root { height: auto; }
