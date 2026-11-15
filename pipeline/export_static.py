@@ -1,5 +1,5 @@
 """Export everything the website needs as static files, so it runs on plain web hosting
-(GoDaddy cPanel / Apache, no Python on the server).
+(Cloudflare R2 / any static host, no Python on the server).
 
 out/
   index.json                 regions, coverage, run settings, uncertainty table, file sizes

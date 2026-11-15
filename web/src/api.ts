@@ -1,6 +1,6 @@
 // Data layer for the static website. Everything is computed in the browser from the files
 // written by `python -m pipeline.run export-static` (see pipeline/export_static.py), so the site
-// runs on plain web hosting such as GoDaddy cPanel. The numbers are the same ones the FastAPI
+// runs on static hosting (Cloudflare Pages for the page, Cloudflare R2 for the data). The numbers are the same ones the FastAPI
 // service returns: region selections use the exact precomputed region series; custom areas are
 // summed from 0.1-degree grid cells whose centre lies inside the shape.
 
@@ -130,7 +130,10 @@ interface Index {
 
 type SeriesFile = Record<string, (string | number | boolean | null)[]>;
 
-const DATA = `${import.meta.env.BASE_URL}data`;
+// Where the data files live. Set VITE_DATA_URL at build time (for example
+// https://data.example.org) when the data is served from a Cloudflare R2 bucket; without it the
+// site reads the data folder next to the page (local development, `npm run dev`).
+const DATA = String(import.meta.env.VITE_DATA_URL || `${import.meta.env.BASE_URL}data`).replace(/\/+$/, "");
 const cache = new Map<string, Promise<unknown>>();
 
 function load<T>(path: string, kind: "json" | "bin"): Promise<T> {
@@ -143,7 +146,7 @@ function load<T>(path: string, kind: "json" | "bin"): Promise<T> {
       .catch((e) => {
         cache.delete(path);
         if (e instanceof ApiError) throw e;
-        throw new ApiError(0, "unreachable", `Data file ${path} could not be loaded. Check that the data folder was uploaded.`);
+        throw new ApiError(0, "unreachable", `Data file ${path} could not be loaded. Check that the data was uploaded and that the data address allows this site (CORS).`);
       });
     cache.set(path, p);
   }

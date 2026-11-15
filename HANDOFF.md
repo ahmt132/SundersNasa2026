@@ -25,11 +25,12 @@ Node.js LTS is needed for the website.
 .venv\Scripts\python -m pipeline.run export-static         # writes web/public/data
 cd web; npm run dev                                         # http://localhost:5173
 ```
-For GoDaddy: `.\scripts\build_site.ps1`, then follow `docs/DEPLOY_GODADDY.md`.
+Online: page on Cloudflare Pages, data on Cloudflare R2 – follow `docs/DEPLOY_CLOUDFLARE.md`
+(`.\scripts\publish_data.ps1` uploads the data).
 
 ## Where things stand
 - Done: worldwide pipeline (30° world blocks), harmonization with leave-one-year-out validation,
-  static website in the FIRMS-style layout (map + side panel), CSV exports, share links, GoDaddy build.
+  static website in the FIRMS-style layout (map + side panel), CSV exports, share links, Cloudflare deployment (Pages + R2).
 - In progress when this was written: the first worldwide run (ingest → grid → harmonize). If the
   site says "index.json could not be loaded", the run and `export-static` have not finished yet.
 - Not done yet: Phase 4 of the brief (README, validation results, limitations, 90-second demo
@@ -38,7 +39,7 @@ For GoDaddy: `.\scripts\build_site.ps1`, then follow `docs/DEPLOY_GODADDY.md`.
 ## Rules the owner set
 - Never invent data, endpoints or results; mark anything unverified as VERIFY.
 - Only the Drive data above. Say where every dataset comes from.
-- Keys only from environment variables (`FIRMS_MAP_KEY`), never in code.
+- Keys only from environment variables (`FIRMS_MAP_KEY`, `R2_*`), never in code.
 
 ## Map
 - `pipeline/` – ingest_global (zips → Parquet per world block), grid, harmonize (+ transfer,

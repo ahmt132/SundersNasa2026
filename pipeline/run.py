@@ -7,7 +7,7 @@
   python -m pipeline.run fetch-nrt --days 14      recent data from the FIRMS area API
   python -m pipeline.run fetch-country            FIRMS yearly country files, no login (history to last full year)
   python -m pipeline.run import-zips --folder data/drive   FIRMS archive-download zips (DL_FIRE_*.zip)
-  python -m pipeline.run export-static            data files for the static (GoDaddy) website
+  python -m pipeline.run export-static            data files for the static website
   python -m pipeline.run verify-country           check downloaded country files against the server's copy
 """
 from __future__ import annotations
