@@ -1,10 +1,13 @@
-// The burning calendar: years as rows, months as columns. Value mode or anomaly mode.
+// The burning calendar: years as rows, months as columns. Each square is one month; its colour (and,
+// when there is room, the number printed in it) says how much burned. "Fire activity" shows the
+// harmonized amount; "Compared with usual" shows how far each month is above or below the median
+// of the same calendar month in the other years.
 import { useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { MonthRow } from "../api";
 import { ChartFrame, Segmented, TipRow, Tooltip, useWidth, type Tip } from "../chart";
 import {
-  ANOMALY_CLAMP, MONTHS, SAT_LABEL, T, anomalyScore, diverging, eraLabel, fmt, fmtPct, inferno,
-  makeValueScale, monthLabel, monthlyMedians,
+  ANOMALY_CLAMP, MONTHS, MONTHS_LONG, SAT_LABEL, T, anomalyScore, diverging, eraLabel, fmt, fmtCompact, fmtPct,
+  makeValueScale, monthLabel, monthlyMedians, rampColor, textOn,
 } from "../lib";
 
 interface Props {
@@ -17,17 +20,17 @@ interface Props {
   onScale: (s: "log" | "quantile") => void;
 }
 
-const LEFT = 42, TOP = 20, ROW = 20, GAP = 2, LEGEND_H = 78;
+const LEFT = 42, TOP = 20, GAP = 3;
 
-export function MonthTip({ m, med }: { m: MonthRow; med: number | null }) {
+function MonthTip({ m, med }: { m: MonthRow; med: number | null }) {
   const h = m.harmonized;
   const departure = h != null && med != null && med > 0 ? ((h - med) / med) * 100 : null;
   return (
     <>
       <div className="tip-title">{monthLabel(m.month)}</div>
-      <TipRow color={T.accent} label="Harmonized" value={fmt(h)} />
+      <TipRow color={T.accent} label="Fire activity (harmonized)" value={fmt(h)} />
       {h != null && m.lo != null && m.hi != null && m.lo !== m.hi && (
-        <TipRow label="5–95 % band" value={`${fmt(m.lo)} – ${fmt(m.hi)}`} />
+        <TipRow label="Likely range (5–95 %)" value={`${fmt(m.lo)} – ${fmt(m.hi)}`} />
       )}
       <TipRow color={T.modis} label="Raw MODIS" value={fmt(m.modis_raw)} />
       {(["viirs_snpp", "viirs_n20", "viirs_n21"] as const).map((s) =>
@@ -36,11 +39,11 @@ export function MonthTip({ m, med }: { m: MonthRow; med: number | null }) {
         ) : null,
       )}
       {med != null && (
-        <TipRow label={`${MONTHS[m.moy - 1]} median`} value={`${fmt(med)}${departure != null ? `  (${fmtPct(departure)})` : ""}`} />
+        <TipRow label={`Usual ${MONTHS_LONG[m.moy - 1]} (median)`} value={`${fmt(med)}${departure != null ? `  (${fmtPct(departure)})` : ""}`} />
       )}
       <div className="tip-note">{eraLabel(m)}</div>
       {m.partial && <div className="tip-note">Partial month: {m.days_observed} of {m.days_in_month} days observed</div>}
-      {h == null && <div className="tip-note">No transfer could be fitted for this month</div>}
+      {h == null && <div className="tip-note">No conversion could be fitted for this month</div>}
     </>
   );
 }
@@ -51,26 +54,49 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
   const [bodyRef, width] = useWidth<HTMLDivElement>();
   const [active, setActive] = useState<{ yi: number; mi: number } | null>(null);
 
-  const { years, byKey, medians, vscale } = useMemo(() => {
+  const { years, byKey, medians, vscale, marks } = useMemo(() => {
     const ys = months.map((m) => m.year);
     const years = ys.length ? Array.from({ length: Math.max(...ys) - Math.min(...ys) + 1 }, (_, i) => Math.min(...ys) + i) : [];
     const byKey = new Map(months.map((m) => [`${m.year}-${m.moy}`, m]));
     const medians = monthlyMedians(months);
     const vscale = makeValueScale(months.filter((m) => m.harmonized != null).map((m) => m.harmonized!), scale);
-    return { years, byKey, medians, vscale };
+    // legend marks are shown only when they occur in the months on screen
+    const marks = {
+      partial: months.some((m) => m.partial),
+      terra: months.some((m) => m.terra_only),
+      none: months.some((m) => m.harmonized == null),
+    };
+    return { years, byKey, medians, vscale, marks };
   }, [months, scale]);
 
   const cw = Math.max(8, (width - LEFT - 6) / 12);
+  const showNumbers = cw >= 36; // room for "12.3k" inside the square
+  const ROW = showNumbers ? Math.min(34, Math.max(26, cw * 0.45)) : 20;
   const gridH = years.length * ROW;
-  const narrow = width - LEFT < 330; // the third legend mark drops to its own line on phones
-  const height = TOP + gridH + LEGEND_H + (narrow ? 18 : 0);
   const cell = (yi: number, mi: number) => byKey.get(`${years[yi]}-${mi + 1}`);
+  const markList = [
+    marks.partial && { key: "partial", label: "partial month (not all days observed)" },
+    marks.terra && { key: "terra", label: "Terra only, scaled" },
+    marks.none && { key: "none", label: "no data" },
+  ].filter(Boolean) as { key: string; label: string }[];
+  const LEGEND_H = 48 + (markList.length ? 26 : 0);
+  const height = TOP + gridH + LEGEND_H;
 
+  const departure = (m: MonthRow) => {
+    const med = medians[m.moy];
+    return m.harmonized == null || med == null || med <= 0 ? null : ((m.harmonized - med) / med) * 100;
+  };
   const fill = (m: MonthRow): string => {
     if (m.harmonized == null) return "none";
     if (mode === "value") return vscale.color(m.harmonized);
     const med = medians[m.moy];
     return med == null ? "none" : diverging(anomalyScore(m.harmonized, med) / ANOMALY_CLAMP);
+  };
+  const label = (m: MonthRow): string => {
+    if (m.harmonized == null) return "";
+    if (mode === "value") return fmtCompact(m.harmonized);
+    const d = departure(m);
+    return d == null ? "" : `${d > 0 ? "+" : d < 0 ? "−" : ""}${Math.abs(d) >= 1000 ? fmtCompact(Math.abs(d)) : Math.round(Math.abs(d))}%`;
   };
 
   const tip: Tip | null = (() => {
@@ -102,17 +128,23 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
   };
 
   // ---- legend geometry
-  const ly = TOP + gridH + 16;
-  const rampW = Math.min(mode === "value" ? 220 : 300, Math.max(120, width - LEFT - 80));
-  const logTicks = [1, 10, 100, 1000, 10000, 100000].filter((v) => v <= vscale.max);
-  const anomTicks = ([[-3, "−88%"], [-1, "−50%"], [0, "median"], [1, "+100%"], [3, "+700%"]] as [number, string][])
+  const ly = TOP + gridH + 14;
+  const rampW = Math.min(360, Math.max(140, width - LEFT - 120));
+  const valueTicks = (() => {
+    // powers of ten inside the range, plus the two ends
+    const out: number[] = [];
+    for (let p = 1; p <= 1e7; p *= 10) if (p > vscale.min * 1.5 && p < vscale.max / 1.5) out.push(p);
+    return [vscale.min, ...out, vscale.max];
+  })();
+  const qStep = Math.max(30, Math.min(52, (width - LEFT - 40) / 7));
+  const anomTicks = ([[-3, "8× less"], [-1, "half"], [0, "usual"], [1, "double"], [3, "8× more"]] as [number, string][])
     .filter(([s]) => rampW >= 260 || Math.abs(s) !== 1);
 
-  const title = mode === "value" ? "Burning calendar" : "Burning calendar — anomaly";
+  const title = mode === "value" ? "Burning calendar" : "Burning calendar — compared with usual";
   const subtitle =
     mode === "value"
-      ? `${unit}, by month. ${vscale.kind === "log" ? "Logarithmic colour scale." : "Quantile colour scale: seven classes with equal numbers of months."}`
-      : "Departure of each month from the multi-year median of the same calendar month, over the months shown. Orange = more burning than usual, purple = less.";
+      ? `Each square is one month: brighter = more fire. The number is the month's fire activity in ${unit.replace(" per month", "")}.`
+      : "Each square compares a month with the same month in the other years: orange = more fire than usual, purple = less. The number is the difference.";
 
   return (
     <ChartFrame
@@ -120,10 +152,10 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
       controls={
         <>
           <Segmented label="Calendar mode" value={mode} onChange={onMode}
-            options={[{ value: "value", label: "Value" }, { value: "anomaly", label: "Anomaly" }]} />
+            options={[{ value: "value", label: "Fire activity" }, { value: "anomaly", label: "Compared with usual" }]} />
           {mode === "value" && (
-            <Segmented label="Colour scale" value={scale} onChange={onScale}
-              options={[{ value: "log", label: "Log" }, { value: "quantile", label: "Quantile" }]} />
+            <Segmented label="Colour steps" value={scale} onChange={onScale}
+              options={[{ value: "log", label: "Gradual" }, { value: "quantile", label: "7 ranked groups" }]} />
           )}
         </>
       }
@@ -138,8 +170,8 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
             <defs>
               {/* Two-tone hatches stay visible on both the darkest and the brightest cells. */}
               <pattern id={`${uid}-partial`} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                <line x1="1" y1="0" x2="1" y2="6" stroke="#000" strokeOpacity="0.6" strokeWidth="1.6" />
-                <line x1="2.6" y1="0" x2="2.6" y2="6" stroke="#fff" strokeOpacity="0.85" strokeWidth="1.4" />
+                <line x1="1" y1="0" x2="1" y2="6" stroke="#000" strokeOpacity="0.45" strokeWidth="1.4" />
+                <line x1="2.6" y1="0" x2="2.6" y2="6" stroke="#fff" strokeOpacity="0.6" strokeWidth="1.2" />
               </pattern>
               <pattern id={`${uid}-terra`} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(135)">
                 <line x1="1" y1="0" x2="1" y2="5" stroke="#000" strokeOpacity="0.55" strokeWidth="1.2" />
@@ -147,19 +179,19 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
               </pattern>
               <linearGradient id={`${uid}-ramp`}>
                 {Array.from({ length: 11 }, (_, i) => (
-                  <stop key={i} offset={`${i * 10}%`} stopColor={mode === "value" ? inferno(i / 10) : diverging(i / 5 - 1)} />
+                  <stop key={i} offset={`${i * 10}%`} stopColor={mode === "value" ? rampColor(i / 10) : diverging(i / 5 - 1)} />
                 ))}
               </linearGradient>
             </defs>
 
             {MONTHS.map((name, mi) => (
-              <text key={name} x={LEFT + mi * cw + (cw - GAP) / 2} y={12} textAnchor="middle" fontFamily={T.sans} fontSize={10.5} fill={T.ink2}>
+              <text key={name} x={LEFT + mi * cw + (cw - GAP) / 2} y={12} textAnchor="middle" fontFamily={T.sans} fontSize={12} fill={T.ink2}>
                 {cw < 30 ? name[0] : name}
               </text>
             ))}
             {years.map((year, yi) => (
               <g key={year}>
-                <text x={LEFT - 8} y={TOP + yi * ROW + ROW / 2 + 2.5} textAnchor="end" fontFamily={T.mono} fontSize={10.5} fill={T.ink2}>
+                <text x={LEFT - 8} y={TOP + yi * ROW + ROW / 2 + 4} textAnchor="end" fontFamily={T.mono} fontSize={12} fill={T.ink2}>
                   {year}
                 </text>
                 {MONTHS.map((_, mi) => {
@@ -167,63 +199,78 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
                   const x = LEFT + mi * cw, y = TOP + yi * ROW, w = cw - GAP, h = ROW - GAP;
                   if (!m) return null;
                   const f = fill(m);
+                  const text = showNumbers ? label(m) : "";
                   return (
                     <g key={mi}>
-                      <rect x={x} y={y} width={w} height={h} rx={2} fill={f} stroke={f === "none" ? T.hairline : "none"} />
-                      {m.terra_only && <rect x={x} y={y} width={w} height={h} rx={2} fill={`url(#${uid}-terra)`} />}
-                      {m.partial && <rect x={x} y={y} width={w} height={h} rx={2} fill={`url(#${uid}-partial)`} />}
+                      <rect x={x} y={y} width={w} height={h} rx={3} fill={f} stroke={f === "none" ? T.hairline : "none"} />
+                      {m.terra_only && <rect x={x} y={y} width={w} height={h} rx={3} fill={`url(#${uid}-terra)`} />}
+                      {m.partial && <rect x={x} y={y} width={w} height={h} rx={3} fill={`url(#${uid}-partial)`} />}
+                      {text && (
+                        <text x={x + w / 2} y={y + h / 2 + 4} textAnchor="middle" fontFamily={T.sans} fontSize={cw >= 52 ? 13 : 11.5}
+                          fontWeight={600} fill={f === "none" ? T.ink2 : textOn(f)} pointerEvents="none"
+                          paintOrder="stroke" stroke={m.partial ? (f === "none" ? T.surface : f) : "none"} strokeWidth={3}>
+                          {text}
+                        </text>
+                      )}
                     </g>
                   );
                 })}
               </g>
             ))}
             {active && cell(active.yi, active.mi) && (
-              <rect x={LEFT + active.mi * cw - 1} y={TOP + active.yi * ROW - 1} width={cw} height={ROW} rx={3}
-                fill="none" stroke={T.ink} strokeWidth={1.5} pointerEvents="none" />
+              <rect x={LEFT + active.mi * cw - 1.5} y={TOP + active.yi * ROW - 1.5} width={cw - GAP + 3} height={ROW - GAP + 3} rx={4}
+                fill="none" stroke={T.ink} strokeWidth={2} pointerEvents="none" />
             )}
 
-            {/* legend: colour scale */}
-            <g transform={`translate(${LEFT},${ly})`} fontFamily={T.sans} fontSize={10.5} fill={T.ink2}>
-              {mode === "value" && (
+            {/* legend: colour scale, with plain words at both ends */}
+            <g transform={`translate(${LEFT},${ly})`} fontFamily={T.sans} fontSize={12} fill={T.ink2}>
+              {mode === "value" && vscale.kind === "quantile" ? (
                 <>
-                  <rect x={0} y={0} width={14} height={9} rx={2} fill={T.zero} />
-                  <text x={7} y={23} textAnchor="middle" fontFamily={T.mono}>0</text>
+                  {vscale.classes.map((c, i) => (
+                    <g key={i} transform={`translate(${i * qStep},0)`}>
+                      <rect width={qStep - 2} height={10} rx={2} fill={c} />
+                      {i > 0 && <text x={-1} y={25} textAnchor="middle" fontFamily={T.mono}>{fmtCompact(vscale.breaks[i - 1])}</text>}
+                    </g>
+                  ))}
+                  <text x={7 * qStep + 8} y={9}>each colour holds one seventh of the months</text>
+                </>
+              ) : (
+                <>
+                  <text x={0} y={9}>{mode === "value" ? "less fire" : "less than usual"}</text>
+                  <g transform="translate(90,0)">
+                    <rect width={rampW} height={10} rx={2} fill={`url(#${uid}-ramp)`} />
+                    {mode === "value"
+                      ? valueTicks.map((v, i) => (
+                          <text key={`${v}-${i}`} x={vscale.pos(v) * rampW} y={25}
+                            textAnchor={i === 0 ? "start" : i === valueTicks.length - 1 ? "end" : "middle"} fontFamily={T.mono}>{fmtCompact(v)}</text>
+                        ))
+                      : anomTicks.map(([s, lab]) => (
+                          <text key={s} x={((s + ANOMALY_CLAMP) / (2 * ANOMALY_CLAMP)) * rampW} y={25}
+                            textAnchor={s === -3 ? "start" : s === 3 ? "end" : "middle"} fontFamily={T.mono}>{lab}</text>
+                        ))}
+                    <text x={rampW + 10} y={9}>{mode === "value" ? "more fire" : "more than usual"}</text>
+                  </g>
                 </>
               )}
-              {mode === "value" && vscale.kind === "quantile" ? (
-                vscale.classes.map((c, i) => (
-                  <g key={i} transform={`translate(${24 + i * 30},0)`}>
-                    <rect width={28} height={9} rx={2} fill={c} />
-                    {i > 0 && <text x={-1} y={23} textAnchor="middle" fontFamily={T.mono}>{fmt(vscale.breaks[i - 1])}</text>}
-                  </g>
-                ))
-              ) : (
-                <g transform={`translate(${mode === "value" ? 24 : 0},0)`}>
-                  <rect width={rampW} height={9} rx={2} fill={`url(#${uid}-ramp)`} />
-                  {mode === "value"
-                    ? logTicks.map((v) => {
-                        const x = (Math.log1p(v) / Math.log1p(vscale.max)) * rampW;
-                        return <text key={v} x={x} y={23} textAnchor="middle" fontFamily={T.mono}>{fmt(v)}</text>;
-                      })
-                    : anomTicks.map(([s, label]) => (
-                        <text key={s} x={((s + ANOMALY_CLAMP) / (2 * ANOMALY_CLAMP)) * rampW} y={23}
-                          textAnchor={s === -3 ? "start" : s === 3 ? "end" : "middle"} fontFamily={T.mono}>{label}</text>
-                      ))}
+              {/* legend: marks that occur in these months */}
+              {markList.length > 0 && (
+                <g transform="translate(0,42)">
+                  {markList.map((mk, i) => {
+                    const x = i * 230;
+                    return (
+                      <g key={mk.key} transform={`translate(${x},0)`}>
+                        {mk.key === "none"
+                          ? <rect x={0.5} y={0.5} width={15} height={11} rx={2} fill="none" stroke={T.hairline} />
+                          : <>
+                              <rect width={16} height={12} rx={2} fill={T.raised} />
+                              <rect width={16} height={12} rx={2} fill={`url(#${uid}-${mk.key})`} />
+                            </>}
+                        <text x={22} y={10}>{mk.label}</text>
+                      </g>
+                    );
+                  })}
                 </g>
               )}
-              {/* legend: marks */}
-              <g transform="translate(0,40)">
-                <rect width={16} height={11} rx={2} fill={T.raised} />
-                <rect width={16} height={11} rx={2} fill={`url(#${uid}-partial)`} />
-                <text x={22} y={9.5}>partial month</text>
-                <rect x={112} width={16} height={11} rx={2} fill={T.raised} />
-                <rect x={112} width={16} height={11} rx={2} fill={`url(#${uid}-terra)`} />
-                <text x={134} y={9.5}>Terra-only, scaled</text>
-                <g transform={narrow ? "translate(0,18)" : "translate(250,0)"}>
-                  <rect x={0.5} y={0.5} width={15} height={10} rx={2} fill="none" stroke={T.hairline} />
-                  <text x={22} y={9.5}>no data</text>
-                </g>
-              </g>
             </g>
           </svg>
         )}

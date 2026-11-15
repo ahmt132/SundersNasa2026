@@ -1,5 +1,5 @@
 """Export everything the website needs as static files, so it runs on plain web hosting
-(GoDaddy cPanel / Apache, no Python on the server).
+(Cloudflare R2 / any static host, no Python on the server).
 
 out/
   index.json                 regions, coverage, run settings, uncertainty table, file sizes
@@ -42,7 +42,9 @@ RECENT_DAYS = 7
 PREDICTORS = ["modis", "terra", "aqua", "viirs_snpp", "viirs_n20", "viirs_n21"]
 CITATION = (
     "Data: NASA FIRMS (Fire Information for Resource Management System), part of NASA LANCE/ESDIS - "
-    "MODIS Collection 6.1 and VIIRS 375 m active fire products. https://firms.modaps.eosdis.nasa.gov/"
+    "MODIS Collection 6.1 and VIIRS 375 m active fire products. https://firms.modaps.eosdis.nasa.gov/ "
+    "Yearly country archives (MODIS from 1 Nov 2000, S-NPP from 20 Jan 2012, NOAA-20 from 1 Apr 2018, through 2022) "
+    "and archive downloads 13 Nov 2022 - 13 Nov 2026 (S-NPP, NOAA-20, NOAA-21, MODIS), whole world."
 )
 
 
@@ -73,15 +75,23 @@ def _clean(v):
     return v
 
 
-def run(cfg: Config, out: str) -> None:
+def run(cfg: Config, out: str, keep_hotspots: bool = False) -> None:
     hdir = cfg.processed / "harmonized"
     if not (hdir / "meta.json").exists():
         raise SystemExit("no harmonized data - run: python -m pipeline.run all")
     meta = json.loads((hdir / "meta.json").read_text("utf-8"))
     out_dir = Path(out)
-    if out_dir.exists():
-        shutil.rmtree(out_dir)  # generated output only
-    out_dir.mkdir(parents=True)
+    old_index = None
+    if keep_hotspots and (out_dir / "index.json").exists():
+        # Detection files depend only on the ingest, not on the calibration: keep them and rewrite the rest.
+        old_index = json.loads((out_dir / "index.json").read_text("utf-8"))
+        for d in ("map",):
+            shutil.rmtree(out_dir / d, ignore_errors=True)
+    else:
+        if out_dir.exists():
+            shutil.rmtree(out_dir)  # generated output only
+        out_dir.mkdir(parents=True)
+    old_hot = {r["id"]: r for r in old_index["regions"]} if old_index else {}
     con = duck_connect()
     k = meta["grid"]["cell_per_deg"] // meta["grid"]["tile_per_deg"]
     regions, total_bytes = [], 0
@@ -90,7 +100,7 @@ def run(cfg: Config, out: str) -> None:
         if not (hdir / "region_monthly" / f"region={rid}" / "data.parquet").exists():
             continue
         rdir = out_dir / "r" / rid
-        (rdir / "hot").mkdir(parents=True)
+        (rdir / "hot").mkdir(parents=True, exist_ok=True)
         entry: dict = {"id": rid, "name": info["name"], "bbox": info["bbox"], "files": {}}
 
         # ---- exact region series
@@ -101,9 +111,15 @@ def run(cfg: Config, out: str) -> None:
         entry["start"], entry["end"] = s["month"].iloc[0], s["month"].iloc[-1]
 
         # ---- harmonized cells
-        h = con.execute(
-            f"SELECT month, ix, iy, h_count, h_celldays FROM read_parquet('{(hdir / 'cells_monthly' / f'region={rid}').as_posix()}/*/*.parquet') "
-            "WHERE h_count > 0 OR h_celldays > 0 ORDER BY month, iy, ix").df()
+        cdir = hdir / "cells_monthly" / f"region={rid}"
+        if any(cdir.glob("*/*.parquet")):
+            h = con.execute(
+                f"SELECT month, ix, iy, h_count, h_celldays FROM read_parquet('{cdir.as_posix()}/*/*.parquet') "
+                "WHERE h_count > 0 OR h_celldays > 0 ORDER BY month, iy, ix").df()
+        else:  # a block with no fire detections at all (open ocean)
+            h = pd.DataFrame({"month": pd.Series(dtype="datetime64[ns]"), "ix": pd.Series(dtype="int64"),
+                              "iy": pd.Series(dtype="int64"), "h_count": pd.Series(dtype="float64"),
+                              "h_celldays": pd.Series(dtype="float64")})
         entry["files"]["cells_h"] = {"n": len(h), "bytes": _write_blocks(rdir / "cells_h.bin", [
             _month_index(h["month"]), h["ix"].to_numpy(np.uint16), h["iy"].to_numpy(np.uint16),
             h["h_count"].fillna(0).to_numpy(np.float32), h["h_celldays"].fillna(0).to_numpy(np.float32)])}
@@ -127,8 +143,9 @@ def run(cfg: Config, out: str) -> None:
 
         # ---- hotspots per year
         src = f"read_parquet('{(cfg.processed / 'hotspots' / f'region={rid}').as_posix()}/*/*.parquet', hive_partitioning=true)"
-        years = [y for (y,) in con.execute(f"SELECT DISTINCT year FROM {src} ORDER BY 1").fetchall()]
-        entry["hot"] = {}
+        years = [] if rid in old_hot else [y for (y,) in con.execute(f"SELECT DISTINCT year FROM {src} ORDER BY 1").fetchall()]
+        entry["hot"] = dict(old_hot[rid]["hot"]) if rid in old_hot else {}
+        total_bytes += sum(v["bytes"] for v in entry["hot"].values()) if rid in old_hot else 0
         for year in years:
           py = con.execute(
               f"SELECT latitude, longitude, frp, acq_date, acq_time, satellite, confidence, type, daynight, proc "
@@ -159,7 +176,7 @@ def run(cfg: Config, out: str) -> None:
               f"{sum(v['n'] for v in entry['hot'].values()):,} hotspots in {len(entry['hot'])} month files")
 
     # ---- world map layer (coarse): harmonized total per 1-degree tile and month
-    (out_dir / "map").mkdir()
+    (out_dir / "map").mkdir(exist_ok=True)
     t = con.execute(
         f"SELECT month, ix // {meta['grid']['cell_per_deg']} AS tx, iy // {meta['grid']['cell_per_deg']} AS ty, "
         f"sum(h_count) AS hc, sum(h_celldays) AS hd "
@@ -171,10 +188,11 @@ def run(cfg: Config, out: str) -> None:
     total_bytes += tiles["bytes"]
 
     # ---- recent detections, whole world, one file per day
-    (out_dir / "recent").mkdir()
     last_day = max((r["last_day"] for r in regions if r["last_day"]), default=None)
-    recent = {}
-    if last_day:
+    recent = old_index["recent"] if old_index else {}
+    if not old_index:
+        (out_dir / "recent").mkdir()
+    if last_day and not old_index:
         hsrc = f"read_parquet('{(cfg.processed / 'hotspots').as_posix()}/*/*/*.parquet', hive_partitioning=true)"
         d = con.execute(
             f"SELECT latitude, longitude, frp, acq_date, acq_time, satellite, confidence FROM {hsrc} "

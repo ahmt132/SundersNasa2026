@@ -25,24 +25,24 @@ Node.js LTS is needed for the website.
 .venv\Scripts\python -m pipeline.run export-static         # writes web/public/data
 cd web; npm run dev                                         # http://localhost:5173
 ```
-For GoDaddy: `.\scripts\build_site.ps1`, then follow `docs/DEPLOY_GODADDY.md`.
+Online: page on Cloudflare Pages, data on Cloudflare R2 – follow `docs/DEPLOY_CLOUDFLARE.md`
+(`.\scripts\publish_data.ps1` uploads the data).
 
 ## Where things stand
 - Done: worldwide pipeline (30° world blocks), harmonization with leave-one-year-out validation,
-  static website in the FIRMS-style layout (map + side panel), CSV exports, share links, GoDaddy build.
-- In progress when this was written: the first worldwide run (ingest → grid → harmonize). If the
-  site says "index.json could not be loaded", the run and `export-static` have not finished yet.
-- Not done yet: Phase 4 of the brief (README, validation results, limitations, 90-second demo
-  script) and Phase 5 (pitch-video prompts for Higgsfield; never spend credits without the owner's "yes").
+  static website (controls on the left, map, results with reading guides under the map; 25 quick areas), CSV exports, share links, Cloudflare deployment (Pages + R2).
+- Phase 4 (README, VALIDATION.md, LIMITATIONS.md, DEMO_SCRIPT.md, updated METHODS.md and
+  docs/DATA_DOWNLOAD.md) written on 15 Nov 2026. All numbers come from the 2022–2026 build;
+  rerun the checks in VALIDATION.md and re-read the demo numbers if the data changes.
+- Phase 5 of the brief (pitch video) was canceled by the owner on 15 Nov 2026.
 
 ## Rules the owner set
 - Never invent data, endpoints or results; mark anything unverified as VERIFY.
 - Only the Drive data above. Say where every dataset comes from.
-- Keys only from environment variables (`FIRMS_MAP_KEY`), never in code.
+- Keys only from environment variables (`R2_*` for the data upload), never in code.
 
 ## Map
 - `pipeline/` – ingest_global (zips → Parquet per world block), grid, harmonize (+ transfer,
   validate, uncertainty), export_static (files for the website)
 - `web/src/` – api.ts (all calculations in the browser), App.tsx (layout), components/
-- `api/` – optional FastAPI service (not needed by the website)
 - `METHODS.md` – method explained in plain language; `tests/` – `python -m pytest tests`

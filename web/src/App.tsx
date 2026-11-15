@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
-  ApiError, DETAIL_ZOOM, calendarCsv, fetchCalendar, fetchCells, fetchPoints, fetchRegions, hotspotsCsv, saveBlob, summarize,
-  type CellsResponse, type Kpis, type Meta, type MonthRow, type PointsResult, type Query, type RegionsResponse, type View,
+  ApiError, DETAIL_ZOOM, calendarExport, fetchCalendar, fetchCells, fetchPoints, fetchRegions, hotspotsExport, saveBlob,
+  type CellsResponse, type ExportFormat, type Meta, type MonthRow, type PointsResult, type Query, type RegionsResponse, type View,
 } from "./api";
+import { BootScreen } from "./components/BootScreen";
 import { Calendar } from "./components/Calendar";
 import { AnnualTotals, SeasonalProfile, SensorPanel } from "./components/Charts";
-import { KpiStrip } from "./components/KpiStrip";
+import { FullGuide, GUIDES, TAB_LABELS, type ResultTab } from "./components/Guide";
 import { BASEMAPS, MapView, POINT_COLORS, type Basemap, type DrawMode, type Layers } from "./components/MapView";
 import { MONTHS, fmt, monthLabel, selectionLabel } from "./lib";
 import { useViewState } from "./state";
@@ -13,11 +14,19 @@ import { useViewState } from "./state";
 interface Data {
   months: MonthRow[];
   meta: Meta;
-  kpis: Kpis;
 }
 
+const CONTACTS = ["a.sungur2008@gmail.com", "alexcemanders32@gmail.com"];
+const TEAM_PAGE = "https://www.spaceappschallenge.org/2026/find-a-team/sunders/";
+
 const WINDOWS = [{ days: 1, label: "24 HRS" }, { days: 3, label: "3 DAYS" }, { days: 7, label: "7 DAYS" }] as const;
+const MAX_RANGE_DAYS = 92; // individual detections for longer periods are too many to draw; the calendar covers those
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+/** YYYY-MM shifted by n months. */
+const addMonths = (ym: string, n: number) => {
+  const i = Number(ym.slice(0, 4)) * 12 + Number(ym.slice(5, 7)) - 1 + n;
+  return `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, "0")}`;
+};
 
 // ---------------------------------------------------------------- small pieces
 
@@ -32,11 +41,13 @@ const ICONS = {
   close: "M6 6l12 12M18 6L6 18",
   link: "M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1 1M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1-1",
   book: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5",
+  mail: "M4 5h16v14H4zM4 6l8 7 8-7",
+  down: "M6 9l6 6 6-6",
+  up: "M6 15l6-6 6 6",
   info: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 16v-4M12 8h.01",
   cal: "M3 5h18v16H3zM16 3v4M8 3v4M3 10h18",
   plus: "M12 5v14M5 12h14",
   minus: "M5 12h14",
-  wide: "M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4",
 };
 
 function MonthPicker({ label, value, min, max, onChange }: { label: string; value: string; min: string; max: string; onChange: (v: string) => void }) {
@@ -109,50 +120,67 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 // ---------------------------------------------------------------- app
+// Layout: top bar; left = controls (map days and layers, area, period and downloads); centre = map;
+// under the map = results (burning calendar and charts, each with a "how to read" guide beside it).
 
 export default function App() {
   const [view, setView] = useViewState();
   const [regions, setRegions] = useState<RegionsResponse | null>(null);
   const [data, setData] = useState<Data | null>(null);
   const [cells, setCells] = useState<CellsResponse | null>(null);
-  const [points, setPoints] = useState<PointsResult>({ points: [], truncated: false, zoomIn: false });
+  const [points, setPoints] = useState<PointsResult>({ points: [], total: 0, stride: 1, modis: 0, zoomIn: false });
   const [mapView, setMapView] = useState<View | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [wide, setWide] = useState(false);
-  const [open, setOpen] = useState<Record<string, boolean>>({ area: true, period: false, kpis: true, calendar: true, charts: false });
-  const [layers, setLayers] = useState<Layers>({ viirs: true, modis: true, cells: true, outlines: false, labels: true });
+  const [controlsOpen, setControlsOpen] = useState(true);
+  const [resultsOpen, setResultsOpen] = useState(true);
+  const [tab, setTab] = useState<ResultTab>("calendar");
+  const [open, setOpen] = useState<Record<string, boolean>>({ intro: true, map: true, area: true, period: false });
+  const [layers, setLayers] = useState<Layers>({ viirs: true, modis: true, cells: true, labels: true });
   const [basemap, setBasemap] = useState<Basemap>("sentinel");
   const [imagery, setImagery] = useState<string | null>(null);
-  const [windowDays, setWindowDays] = useState<number>(7);
+  // map window: any two dates (inclusive); the round buttons are shortcuts ending on the latest day
+  const [windowStart, setWindowStart] = useState<string | null>(null);
   const [windowEnd, setWindowEnd] = useState<string | null>(null);
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const [rangeDraft, setRangeDraft] = useState({ from: "", to: "" });
+  const [rangeError, setRangeError] = useState("");
   const [drawMode, setDrawMode] = useState<DrawMode>(null);
   const [nVerts, setNVerts] = useState(0);
   const [cursor, setCursor] = useState<{ lat: number; lon: number } | null>(null);
   const [point, setPoint] = useState({ lat: "", lon: "", km: "25" });
   const [formError, setFormError] = useState("");
-  const [modal, setModal] = useState<null | "methods" | "about">(null);
+  const [modal, setModal] = useState<null | "about" | "guide" | "contact">(null);
   const finishRef = useRef<() => void>(() => undefined);
+  const [pointsReady, setPointsReady] = useState(false);
+  const [drawn, setDrawn] = useState(false);
+  const [bootTimedOut, setBootTimedOut] = useState(false);
+  useEffect(() => {
+    // Never keep the loading screen up forever (for example if a map tile server is very slow).
+    const t = window.setTimeout(() => setBootTimedOut(true), 30_000);
+    return () => window.clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     fetchRegions()
       .then((r) => {
         setRegions(r);
-        setWindowEnd(r.last_day);
-        if (!view.sel && r.regions.length) {
-          const first = r.regions.find((x) => x.id === "world") ?? r.regions[0];
-          setView({ sel: { type: "region", id: first.id } });
+        if (r.last_day) {
+          setWindowEnd(r.last_day);
+          setWindowStart(addDays(r.last_day, -6));
         }
+        // no area in the link, or one that no longer exists: start with the whole world
+        const sel = view.sel;
+        if (!sel || (sel.type === "region" && !r.regions.some((x) => x.id === sel.id))) setView({ sel: { type: "region", id: "world" } });
       })
       .catch((e) => setError(e instanceof ApiError ? e : new ApiError(0, "error", String(e))));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const query: Query | null = useMemo(
-    () => (view.sel ? { sel: view.sel, from: view.from, to: view.to, metric: view.metric } : null),
-    [view.sel, view.from, view.to, view.metric],
+    () => (view.sel && regions ? { sel: view.sel, from: view.from, to: view.to, metric: view.metric } : null),
+    [view.sel, view.from, view.to, view.metric, regions],
   );
 
   useEffect(() => {
@@ -162,7 +190,7 @@ export default function App() {
     fetchCalendar(query)
       .then((cal) => {
         if (!live) return;
-        setData({ months: cal.months, meta: cal.meta, kpis: summarize(cal.months) });
+        setData({ months: cal.months, meta: cal.meta });
         setError(null);
       })
       .catch((e) => {
@@ -183,25 +211,61 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.from, view.to, view.metric, detail]);
 
-  const windowStart = windowEnd ? addDays(windowEnd, -(windowDays - 1)) : null;
+  const windowDays = windowStart && windowEnd ? Math.round((Date.parse(windowEnd) - Date.parse(windowStart)) / 864e5) + 1 : 0;
+  const lastDay = regions?.last_day ?? null;
+  const firstDay = regions ? regions.first_day ?? `${regions.data_range.start}-01` : null;
+  const preset = (days: number) => {
+    if (!lastDay) return;
+    setWindowEnd(lastDay);
+    setWindowStart(addDays(lastDay, -(days - 1)));
+    setRangeOpen(false);
+  };
+  const applyRange = (e: FormEvent) => {
+    e.preventDefault();
+    const { from: a, to: b } = rangeDraft;
+    if (!a || !b) return setRangeError("Choose both dates.");
+    if (a > b) return setRangeError("The start date must be on or before the end date.");
+    if ((firstDay && a < firstDay) || (lastDay && b > lastDay)) return setRangeError(`Data covers ${firstDay} to ${lastDay}.`);
+    if ((Date.parse(b) - Date.parse(a)) / 864e5 + 1 > MAX_RANGE_DAYS)
+      return setRangeError(`Choose at most ${MAX_RANGE_DAYS} days. For longer periods use the burning calendar.`);
+    setRangeError("");
+    setWindowStart(a);
+    setWindowEnd(b);
+    setRangeOpen(false);
+  };
   useEffect(() => {
     if (!windowEnd || !windowStart) return;
     let live = true;
-    fetchPoints(windowStart, windowEnd, mapView).then((r) => live && setPoints(r)).catch(() => undefined);
+    fetchPoints(windowStart, windowEnd, mapView)
+      .then((r) => { if (live) { setPoints(r); setPointsReady(true); } })
+      .catch(() => live && setPointsReady(true));
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [windowStart, windowEnd, windowEnd === regions?.last_day ? "" : mapView?.bounds.map((v) => v.toFixed(1)).join(",")]);
+  }, [windowStart, windowEnd, mapView?.bounds.map((v) => v.toFixed(1)).join(",")]);
+
+  const booting = !drawn && !bootTimedOut && !error;
+  const bootStage = !regions ? "Reading the data index"
+    : cells == null ? "Loading the world fire grid"
+    : !pointsReady ? `Loading fire detections, ${windowDays} days`
+    : !data ? "Preparing the burning calendar"
+    : `Drawing ${points.total.toLocaleString("en-US")} fire detections`;
 
   const range = regions?.data_range;
   const from = view.from ?? range?.start ?? "2000-11";
-  const to = view.to ?? range?.end ?? "2025-12";
+  const to = view.to ?? range?.end ?? "2026-11";
+  const last12 = range ? addMonths(range.end, -11) : null;
   const unitShort = view.metric === "count" ? "hotspots" : "active cell-days";
   const selLabel = view.sel && regions ? selectionLabel(view.sel, regions.regions) : "";
   const footer = data
     ? `Source: NASA FIRMS, MODIS Collection 6.1 and VIIRS 375 m active fire. Area: ${selLabel}. Pipeline run ${data.meta.pipeline_run_utc.slice(0, 10)}.`
     : "";
-  const nViirs = points.points.filter((p) => p.sat !== "Terra" && p.sat !== "Aqua").length;
-  const nModis = points.points.length - nViirs;
+  const nModis = points.modis;
+  const nViirs = points.total - points.modis;
+  const groups = useMemo(() => {
+    const g = new Map<string, RegionsResponse["regions"]>();
+    regions?.regions.forEach((r) => g.set(r.group, [...(g.get(r.group) ?? []), r]));
+    return [...g.entries()];
+  }, [regions]);
 
   const flash = (text: string) => {
     setNotice(text);
@@ -215,12 +279,12 @@ export default function App() {
       flash("Copy the address bar: it already encodes this view.");
     }
   };
-  const exportCsv = async (kind: "calendar" | "hotspots") => {
+  const exportFile = async (kind: "calendar" | "hotspots", format: ExportFormat) => {
     if (!query) return;
     flash(kind === "hotspots" ? "Preparing hotspot file…" : "Preparing calendar file…");
     try {
-      const blob = kind === "calendar" ? await calendarCsv(query, selLabel) : await hotspotsCsv(query, selLabel);
-      saveBlob(blob, kind === "calendar" ? `burning_calendar_${view.metric}.csv` : "hotspots.csv");
+      const blob = kind === "calendar" ? await calendarExport(query, selLabel, format) : await hotspotsExport(query, selLabel, format);
+      saveBlob(blob, kind === "calendar" ? `burning_calendar_${view.metric}.${format}` : `hotspots.${format}`);
       flash("Download ready.");
     } catch (e) {
       flash((e as Error).message);
@@ -251,95 +315,92 @@ export default function App() {
     setFormError("");
     setDrawMode((cur) => (cur === m ? null : m));
   };
-
-  // On narrow screens the panel sits below the map, so it covers none of it.
-  const stacked = typeof window !== "undefined" && window.matchMedia("(max-width: 860px)").matches;
-  const panelWidth = !panelOpen || stacked ? 0 : wide ? Math.round(window.innerWidth * 0.55) : 470;
+  const period = data && data.months.length
+    ? `${monthLabel(data.months[0].month)} – ${monthLabel(data.months[data.months.length - 1].month)}` : "";
 
   return (
-    <div className={`app${panelOpen ? "" : " panel-closed"}${wide ? " wide" : ""}`}>
+    <div className={`app${controlsOpen ? "" : " controls-closed"}${resultsOpen ? "" : " results-closed"}`}>
+      <BootScreen stage={bootStage} done={!booting} />
       <header className="topbar">
-        <button type="button" className="icon-btn" aria-label={panelOpen ? "Hide side panel" : "Show side panel"} aria-expanded={panelOpen}
-          onClick={() => setPanelOpen((v) => !v)}><Icon d={ICONS.menu} size={22} /></button>
+        <button type="button" className="icon-btn" aria-label={controlsOpen ? "Hide controls" : "Show controls"} aria-expanded={controlsOpen}
+          onClick={() => setControlsOpen((v) => !v)}><Icon d={ICONS.menu} size={22} /></button>
         <div className="brand">
-          <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
-            <rect x="1" y="1" width="30" height="30" rx="4" fill="none" stroke="currentColor" strokeWidth="2" />
-            {[0, 1, 2].map((r) => [0, 1, 2, 3].map((c) => (
-              <rect key={`${r}${c}`} x={6 + c * 5.5} y={8 + r * 6} width="4" height="4.4" rx="0.8"
-                fill="currentColor" opacity={[0.35, 0.55, 1, 0.7, 0.45, 0.9, 1, 0.6, 0.3, 0.5, 0.8, 0.4][r * 4 + c]} />
-            )))}
-          </svg>
+          <img className="mark" src="./brand/sunders-planet.png" alt="" width={38} height={38} />
           <div>
             <div className="brand-name">Burning Calendar</div>
-            <div className="brand-sub">Harmonized MODIS + VIIRS active-fire record</div>
+            <div className="brand-sub">One fire record from two generations of NASA satellites · NASA Space Apps Challenge 2026 · team Sunders</div>
           </div>
         </div>
         <nav className="top-links" aria-label="Site">
+          <button type="button" onClick={() => setModal("about")}><Icon d={ICONS.info} /> <span>About</span></button>
+          <button type="button" onClick={() => setModal("guide")}><Icon d={ICONS.book} /> <span>How to read</span></button>
+          <button type="button" onClick={() => setModal("contact")}><Icon d={ICONS.mail} /> <span>Contact</span></button>
           <button type="button" onClick={share}><Icon d={ICONS.link} /> <span>Share link</span></button>
-          <button type="button" onClick={() => setModal("methods")}><Icon d={ICONS.book} /> <span>Methods</span></button>
-          <button type="button" onClick={() => setModal("about")}><Icon d={ICONS.info} /> <span>Data &amp; credits</span></button>
         </nav>
       </header>
 
-      <div className="stage">
-        <MapView
-          regions={regions?.regions ?? []} sel={view.sel} cells={cells} points={points.points} layers={layers}
-          basemap={basemap} imagery={imagery} imageryDate={windowEnd} drawMode={drawMode} rightInset={panelWidth}
-          onDrawEnd={() => setDrawMode(null)} onDrawCount={setNVerts} onSelect={(sel) => setView({ sel })}
-          onPickPoint={(lat, lon) => setPoint((p) => ({ ...p, lat: lat.toFixed(4), lon: lon.toFixed(4) }))}
-          onCursor={setCursor} onView={setMapView} onClear={clearArea} finishRef={finishRef}
-        />
+      <div className="workspace">
+        {/* ---------------- controls (left) */}
+        {controlsOpen && (
+          <aside className="controls" aria-label="Controls">
+            {open.intro && (
+              <div className="intro">
+                <button type="button" className="icon-btn intro-close" aria-label="Hide this introduction" onClick={() => toggle("intro")}><Icon d={ICONS.close} size={16} /></button>
+                <p><strong>Built for the NASA Space Apps Challenge 2026</strong> by team Sunders, for the challenge <em>Harmonization of MODIS and VIIRS Hot Spots</em>.</p>
+                <p>NASA&apos;s older MODIS and newer VIIRS satellites see the same fires very differently: VIIRS reports about four times more hotspots. This site converts both into one consistent unit, so fire activity can be compared across places and years.</p>
+                <p className="intro-links">
+                  <button type="button" className="link" onClick={() => setModal("about")}>About the project</button>
+                  <button type="button" className="link" onClick={() => setModal("guide")}>How to read the site</button>
+                </p>
+              </div>
+            )}
 
-        <div className="infobar" aria-live="off" style={{ left: `calc((100% - ${panelWidth ? panelWidth + 12 : 0}px) / 2)` }}>
-          <span>{cursor ? `Lat: ${cursor.lat.toFixed(3)}°, Lon: ${cursor.lon.toFixed(3)}°` : "Lat: –, Lon: –"}</span>
-          <span>HOTSPOTS: {windowEnd ? `${windowStart === windowEnd ? windowEnd : `${windowStart} to ${windowEnd}`} (${windowDays} ${windowDays === 1 ? "DAY" : "DAYS"})` : "–"}</span>
-        </div>
-
-        {drawMode && (
-          <div className="draw-hint" role="status" style={{ left: `calc((100% - ${panelWidth ? panelWidth + 12 : 0}px) / 2)` }}>
-            {drawMode === "rect" && "Drag on the map to draw a rectangle. Esc cancels."}
-            {drawMode === "poly" && <>Click to add corners ({nVerts}). Double-click or Enter to finish. <button type="button" className="link" disabled={nVerts < 3} onClick={() => finishRef.current()}>Finish</button></>}
-            {drawMode === "point" && "Click the map to place the centre, or type it in the panel."}
-            <button type="button" className="link" onClick={() => setDrawMode(null)}>Cancel</button>
-          </div>
-        )}
-
-        {panelOpen && (
-          <aside className="panel" aria-label="Analysis panel">
-            <div className="panel-head">
-              <Icon d={ICONS.menu} size={22} />
-              <span className="panel-title">Burning calendar</span>
-              <button type="button" className="icon-btn wide-btn" aria-pressed={wide} aria-label={wide ? "Narrow panel" : "Widen panel"} title={wide ? "Narrow panel" : "Widen panel"}
-                onClick={() => setWide((w) => !w)}><Icon d={ICONS.wide} /></button>
-              <button type="button" className="icon-btn" aria-label="Close panel" onClick={() => setPanelOpen(false)}><Icon d={ICONS.close} /></button>
-            </div>
-
-            <div className="panel-scroll">
-              <div className="time-row" role="group" aria-label="Hotspots shown on the map">
+            <Section id="map" title="Fires on the map" open={open.map} onToggle={toggle}>
+              <div className="time-row" role="group" aria-label="Days of detections shown on the map">
                 {WINDOWS.map((w) => (
-                  <button key={w.days} type="button" className="round" aria-pressed={windowDays === w.days}
-                    onClick={() => setWindowDays(w.days)}>{w.label}</button>
+                  <button key={w.days} type="button" className="round"
+                    aria-pressed={!rangeOpen && windowEnd === lastDay && windowDays === w.days}
+                    onClick={() => preset(w.days)}>{w.label}</button>
                 ))}
-                <label className="round cal" title="Last day of the map window">
+                <button type="button" className="round cal" aria-pressed={rangeOpen || (windowEnd !== lastDay || !WINDOWS.some((w) => w.days === windowDays))}
+                  aria-expanded={rangeOpen} title="Choose two dates" aria-label="Choose two dates"
+                  onClick={() => {
+                    setRangeDraft({ from: windowStart ?? "", to: windowEnd ?? "" });
+                    setRangeError("");
+                    setRangeOpen((o) => !o);
+                  }}>
                   <Icon d={ICONS.cal} />
-                  <input type="date" aria-label="Last day of the map window" value={windowEnd ?? ""} max={regions?.last_day ?? undefined}
-                    min={regions ? `${regions.data_range.start}-01` : undefined} onChange={(e) => e.target.value && setWindowEnd(e.target.value)} />
-                </label>
+                </button>
                 <div className="time-text">
                   <strong>{windowDays} {windowDays === 1 ? "DAY" : "DAYS"}</strong>
-                  <span>to {windowEnd ?? "–"} UTC{windowEnd === regions?.last_day ? " (latest data)" : ""}</span>
+                  <span>{windowStart === windowEnd ? windowEnd : `${windowStart} → ${windowEnd}`}{windowEnd === lastDay ? " (latest)" : ""}</span>
                 </div>
               </div>
-
+              {rangeOpen && (
+                <form className="range-form" onSubmit={applyRange}>
+                  <label className="field"><span>From</span>
+                    <input type="date" value={rangeDraft.from} min={firstDay ?? undefined} max={lastDay ?? undefined}
+                      onChange={(e) => setRangeDraft((d) => ({ ...d, from: e.target.value }))} />
+                  </label>
+                  <label className="field"><span>To</span>
+                    <input type="date" value={rangeDraft.to} min={rangeDraft.from || firstDay || undefined} max={lastDay ?? undefined}
+                      onChange={(e) => setRangeDraft((d) => ({ ...d, to: e.target.value }))} />
+                  </label>
+                  <button type="submit" className="primary">Show</button>
+                  <button type="button" onClick={() => setRangeOpen(false)}>Cancel</button>
+                  <p className="small">Any two dates between {firstDay} and {lastDay}, up to {MAX_RANGE_DAYS} days. Dates before the last 7 days are drawn for the area on screen, so zoom in to a region first.</p>
+                  {rangeError && <p className="error" role="alert">{rangeError}</p>}
+                </form>
+              )}
               <div className="layers">
-                <LayerRow on={layers.viirs} color={POINT_COLORS.viirs} kind="dot" label={`VIIRS (S-NPP, NOAA-20, NOAA-21) [375 m] · ${fmt(nViirs)}`}
-                  hint="Each dot is one VIIRS 375 m detection (nominal or high confidence) in the map window. Click a dot for details."
+                <LayerRow on={layers.viirs} color={POINT_COLORS.viirs} kind="dot" label={`VIIRS detections · ${fmt(nViirs)}`}
+                  hint="Each dot is one VIIRS 375 m detection (S-NPP, NOAA-20, NOAA-21; nominal or high confidence). Click a dot for details."
                   onClick={() => setLayers((l) => ({ ...l, viirs: !l.viirs }))} />
-                <LayerRow on={layers.modis} color={POINT_COLORS.modis} kind="ring" label={`MODIS (Aqua & Terra) [1 km] · ${fmt(nModis)}`}
-                  hint="Each ring is one MODIS 1 km detection (confidence 30 or more) in the map window."
+                <LayerRow on={layers.modis} color={POINT_COLORS.modis} kind="ring" label={`MODIS detections · ${fmt(nModis)}`}
+                  hint="Each ring is one MODIS 1 km detection (Terra and Aqua; confidence 30 or more)."
                   onClick={() => setLayers((l) => ({ ...l, modis: !l.modis }))} />
-                <LayerRow on={layers.cells} color="#f98e09" kind="grid" label={`Harmonized total per ${cells?.cell_deg === 1 ? "1°" : "0.1°"} cell (analysis period)`}
-                  hint="MODIS-equivalent total over the analysis period chosen below: 1-degree cells when zoomed out, 0.1-degree cells when zoomed in."
+                <LayerRow on={layers.cells} color="#f98e09" kind="grid" label={`Total fire per ${cells?.cell_deg === 1 ? "1°" : "0.1°"} square`}
+                  hint="Harmonized (MODIS-equivalent) total over the analysis period: 1-degree squares when zoomed out, 0.1-degree squares when zoomed in."
                   onClick={() => setLayers((l) => ({ ...l, cells: !l.cells }))} />
                 <LayerRow on={layers.labels} color="#ffffff" kind="line" label="Place names & borders" hint="Place names and country borders over the imagery."
                   onClick={() => setLayers((l) => ({ ...l, labels: !l.labels }))} />
@@ -354,120 +415,188 @@ export default function App() {
                     <option value="img:VIIRS_NOAA20_CorrectedReflectance_TrueColor">Satellite image of {windowEnd ?? "the last day"} (VIIRS NOAA-20)</option>
                   </select>
                 </label>
-                {points.truncated && <p className="small">Map shows the first 200,000 detections of this window.</p>}
+                {points.stride > 1 && (
+                  <p className="small">{fmt(points.total)} detections in view: the map draws every {points.stride}th one. Zoom in to see all of them.</p>
+                )}
                 {points.zoomIn && <p className="small">Detections before the last 7 days are shown for the area on screen: zoom in to a region (about 60° across or less).</p>}
               </div>
+            </Section>
 
-              <Section id="area" title="Area" open={open.area} onToggle={toggle}>
-                <label className="field">
-                  <span>Quick areas</span>
-                  <select value={view.sel?.type === "region" ? view.sel.id : ""} onChange={(e) => e.target.value && setView({ sel: { type: "region", id: e.target.value } })}>
-                    <option value="" disabled>Custom area</option>
-                    {regions?.regions.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                  </select>
-                </label>
-                <div className="seg" role="group" aria-label="Draw an area">
-                  <button type="button" aria-pressed={drawMode === "rect"} onClick={() => startDraw("rect")}>Rectangle</button>
-                  <button type="button" aria-pressed={drawMode === "poly"} onClick={() => startDraw("poly")}>Polygon</button>
-                  <button type="button" aria-pressed={drawMode === "point"} onClick={() => startDraw("point")}>Point + radius</button>
-                </div>
-                {drawMode === "point" && (
-                  <form className="point-form" onSubmit={applyPoint}>
-                    <label className="field"><span>Latitude</span><input inputMode="decimal" value={point.lat} onChange={(e) => setPoint({ ...point, lat: e.target.value })} /></label>
-                    <label className="field"><span>Longitude</span><input inputMode="decimal" value={point.lon} onChange={(e) => setPoint({ ...point, lon: e.target.value })} /></label>
-                    <label className="field"><span>Radius, km</span><input inputMode="decimal" value={point.km} onChange={(e) => setPoint({ ...point, km: e.target.value })} /></label>
-                    <button type="submit" className="primary">Apply</button>
-                    {formError && <p className="error" role="alert">{formError}</p>}
-                  </form>
-                )}
-                <div className="selection-line">
-                  <span className="label">Selected</span> <span>{selLabel || "–"}</span>
-                  {!isWorld && <button type="button" className="clear-btn" onClick={clearArea}>Clear area</button>}
-                </div>
-                {data?.meta.approximate && (
-                  <p className="small">Custom area: monthly values are summed over 0.1° grid cells whose centre lies inside the shape. Hotspot downloads use the exact shape.</p>
-                )}
-              </Section>
-
-              <Section id="period" title="Analysis period & downloads" open={open.period} onToggle={toggle}>
-                {range && (
-                  <>
-                    <div className="row">
-                      <MonthPicker label="From" value={from} min={range.start} max={to} onChange={(v) => setView({ from: v === range.start ? null : v })} />
-                      <MonthPicker label="To" value={to} min={from} max={range.end} onChange={(v) => setView({ to: v === range.end ? null : v })} />
-                    </div>
-                    <div className="seg" role="group" aria-label="Period presets">
-                      <button type="button" aria-pressed={!view.from && !view.to} onClick={() => setView({ from: null, to: null })}>All years</button>
-                      <button type="button" aria-pressed={view.from === `${Number(range.end.slice(0, 4)) - 1}-${range.end.slice(5)}` && !view.to}
-                        onClick={() => setView({ from: `${Number(range.end.slice(0, 4)) - 1}-${range.end.slice(5)}`, to: null })}>Last 12 months</button>
-                    </div>
-                  </>
-                )}
-                <label className="field">
-                  <span>Metric</span>
-                  <select value={view.metric} onChange={(e) => setView({ metric: e.target.value as "count" | "celldays" })}>
-                    <option value="count">Hotspot count</option>
-                    <option value="celldays">Active cell-days (0.05°)</option>
-                  </select>
-                </label>
-                <div className="downloads">
-                  <button type="button" className="primary" disabled={!data} onClick={() => exportCsv("calendar")}>Calendar CSV</button>
-                  <button type="button" disabled={!data} onClick={() => exportCsv("hotspots")}>Hotspots CSV</button>
-                  <button type="button" disabled={!data} onClick={methodsNote}>Methods note</button>
-                  <button type="button" onClick={share}>Copy share link</button>
-                </div>
-              </Section>
-
-              {notice && <p className="notice" role="status">{notice}</p>}
-              {error && (
-                <div className="message" role="alert">
-                  <strong>{error.code === "empty_selection" ? "No hotspots here" : error.code === "outside_coverage" ? "Outside the available regions" : "Could not load this view"}</strong>
-                  <p>{error.message}</p>
-                </div>
+            <Section id="area" title="Area" open={open.area} onToggle={toggle}>
+              <label className="field">
+                <span>Quick areas</span>
+                <select value={view.sel?.type === "region" ? view.sel.id : ""} onChange={(e) => e.target.value && setView({ sel: { type: "region", id: e.target.value } })}>
+                  <option value="" disabled>Custom area</option>
+                  {groups.map(([group, list]) => (
+                    <optgroup key={group} label={group}>
+                      {list.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+              <div className="draw-label label">Or draw your own</div>
+              <div className="seg" role="group" aria-label="Draw an area">
+                <button type="button" aria-pressed={drawMode === "rect"} onClick={() => startDraw("rect")}>Rectangle</button>
+                <button type="button" aria-pressed={drawMode === "poly"} onClick={() => startDraw("poly")}>Polygon</button>
+                <button type="button" aria-pressed={drawMode === "point"} onClick={() => startDraw("point")}>Point + radius</button>
+              </div>
+              {drawMode === "point" && (
+                <form className="point-form" onSubmit={applyPoint}>
+                  <label className="field"><span>Latitude</span><input inputMode="decimal" value={point.lat} onChange={(e) => setPoint({ ...point, lat: e.target.value })} /></label>
+                  <label className="field"><span>Longitude</span><input inputMode="decimal" value={point.lon} onChange={(e) => setPoint({ ...point, lon: e.target.value })} /></label>
+                  <label className="field"><span>Radius, km</span><input inputMode="decimal" value={point.km} onChange={(e) => setPoint({ ...point, km: e.target.value })} /></label>
+                  <button type="submit" className="primary">Apply</button>
+                  {formError && <p className="error" role="alert">{formError}</p>}
+                </form>
               )}
-              {!data && !error && <p className="loading">Loading…</p>}
-
-              {data && (
-                <div className={loading ? "content stale" : "content"}>
-                  <Section id="kpis" title="Key figures" open={open.kpis} onToggle={toggle}>
-                    <KpiStrip kpis={data.kpis} unitShort={unitShort} range={`${monthLabel(data.months[0].month)} – ${monthLabel(data.months[data.months.length - 1].month)}`} />
-                  </Section>
-                  <Section id="calendar" title="Burning calendar" open={open.calendar} onToggle={toggle}>
-                    <Calendar months={data.months} mode={view.mode} scale={view.scale} unit={data.meta.unit} footer={footer}
-                      onMode={(mode) => setView({ mode })} onScale={(scale) => setView({ scale })} />
-                  </Section>
-                  <Section id="charts" title="Charts" open={open.charts} onToggle={toggle}>
-                    <SeasonalProfile months={data.months} unitShort={unitShort} footer={footer} />
-                    <AnnualTotals months={data.months} unitShort={unitShort} footer={footer} />
-                    <SensorPanel months={data.months} unitShort={unitShort} footer={footer} agg={view.agg} onAgg={(agg) => setView({ agg })} />
-                  </Section>
-                </div>
+              <div className="selection-line">
+                <span className="label">Selected</span> <span>{selLabel || "–"}</span>
+                {!isWorld && <button type="button" className="clear-btn" onClick={clearArea}>Clear area</button>}
+              </div>
+              {data?.meta.approximate && (
+                <p className="small">Custom area: monthly values are summed over 0.1° grid squares whose centre lies inside the shape. Hotspot downloads use the exact shape.</p>
               )}
+            </Section>
 
-              <p className="panel-note">
-                <strong>NOTE:</strong> Active fires / thermal anomalies. Hotspots are satellite pixel detections, not individual fires; cloud and smoke hide fires.
-                {regions && ` Data: ${regions.data_range.start} to ${regions.last_day ?? regions.data_range.end}.`}
-              </p>
-            </div>
+            <Section id="period" title="Analysis period & downloads" open={open.period} onToggle={toggle}>
+              {range && (
+                <>
+                  <div className="row">
+                    <MonthPicker label="From" value={from} min={range.start} max={to} onChange={(v) => setView({ from: v === range.start ? null : v })} />
+                    <MonthPicker label="To" value={to} min={from} max={range.end} onChange={(v) => setView({ to: v === range.end ? null : v })} />
+                  </div>
+                  <div className="seg" role="group" aria-label="Period presets">
+                    <button type="button" aria-pressed={!view.from && !view.to} onClick={() => setView({ from: null, to: null })}>All years</button>
+                    <button type="button" aria-pressed={view.from === last12 && !view.to} onClick={() => setView({ from: last12, to: null })}>Last 12 months</button>
+                  </div>
+                </>
+              )}
+              <label className="field">
+                <span>Measure</span>
+                <select value={view.metric} onChange={(e) => setView({ metric: e.target.value as "count" | "celldays" })}>
+                  <option value="count">Hotspot count</option>
+                  <option value="celldays">Active cell-days (0.05°)</option>
+                </select>
+              </label>
+              <div className="downloads">
+                <button type="button" className="primary" disabled={!data} onClick={() => exportFile("calendar", "csv")}>Calendar CSV</button>
+                <button type="button" disabled={!data} onClick={() => exportFile("calendar", "xlsx")}
+                  title="Excel workbook: opens correctly in any language version of Excel">Calendar Excel</button>
+                <button type="button" disabled={!data} onClick={() => exportFile("hotspots", "csv")}>Hotspots CSV</button>
+                <button type="button" disabled={!data} onClick={() => exportFile("hotspots", "xlsx")}
+                  title="Excel workbook: opens correctly in any language version of Excel">Hotspots Excel</button>
+                <button type="button" disabled={!data} onClick={methodsNote}>Methods note</button>
+              </div>
+            </Section>
+
+            {notice && <p className="notice" role="status">{notice}</p>}
+            <p className="panel-note">
+              <strong>NOTE:</strong> Hotspots are satellite pixel detections of active fire, not individual fires; cloud and smoke hide fires.
+              {regions && ` Data: ${regions.data_range.start} to ${regions.last_day ?? regions.data_range.end}.`}
+            </p>
           </aside>
         )}
+
+        {/* ---------------- map (centre) */}
+        <main className="map-area">
+          <MapView
+            regions={regions?.regions ?? []} sel={view.sel} cells={cells} points={points.points} layers={layers}
+            basemap={basemap} imagery={imagery} imageryDate={windowEnd} drawMode={drawMode}
+            onDrawEnd={() => setDrawMode(null)} onDrawCount={setNVerts} onSelect={(sel) => setView({ sel })}
+            onPickPoint={(lat, lon) => setPoint((p) => ({ ...p, lat: lat.toFixed(4), lon: lon.toFixed(4) }))}
+            onCursor={setCursor} onView={setMapView} onClear={clearArea} finishRef={finishRef}
+            awaitDrawn={booting && pointsReady && cells != null} onDrawn={() => setDrawn(true)}
+          />
+          <div className="infobar" aria-live="off">
+            <span>{cursor ? `Lat ${cursor.lat.toFixed(3)}°, Lon ${cursor.lon.toFixed(3)}°` : "Lat –, Lon –"}</span>
+            <span>Detections: {windowEnd ? `${windowStart === windowEnd ? windowEnd : `${windowStart} to ${windowEnd}`} (${windowDays} ${windowDays === 1 ? "day" : "days"})` : "–"}</span>
+          </div>
+          {drawMode && (
+            <div className="draw-hint" role="status">
+              {drawMode === "rect" && "Drag on the map to draw a rectangle. Esc cancels."}
+              {drawMode === "poly" && <>Click to add corners ({nVerts}). Double-click or Enter to finish. <button type="button" className="link" disabled={nVerts < 3} onClick={() => finishRef.current()}>Finish</button></>}
+              {drawMode === "point" && "Click the map to place the centre, or type it in the panel."}
+              <button type="button" className="link" onClick={() => setDrawMode(null)}>Cancel</button>
+            </div>
+          )}
+        </main>
+
+        {/* ---------------- results (under the map) */}
+        <section className="results" aria-label="Results for the selected area">
+          <div className="results-head">
+            <div className="tabs" role="tablist" aria-label="Results">
+              {(Object.keys(TAB_LABELS) as ResultTab[]).map((k) => (
+                <button key={k} type="button" role="tab" aria-selected={tab === k}
+                  onClick={() => { setTab(k); setResultsOpen(true); }}>{TAB_LABELS[k]}</button>
+              ))}
+            </div>
+            <div className="results-where">
+              <span className="label">Area</span> <strong>{selLabel || "–"}</strong>
+              {period && <span className="results-period">{period}</span>}
+            </div>
+            <button type="button" className="icon-btn" aria-expanded={resultsOpen}
+              aria-label={resultsOpen ? "Make the map bigger (hide results)" : "Show results"} title={resultsOpen ? "Hide results" : "Show results"}
+              onClick={() => setResultsOpen((o) => !o)}><Icon d={resultsOpen ? ICONS.down : ICONS.up} /></button>
+          </div>
+          {resultsOpen && (
+            <div className="results-body">
+              {error ? (
+                <div className="message" role="alert">
+                  <strong>{error.code === "empty_selection" ? "No hotspots here" : error.code === "outside_coverage" ? "No fires in this area" : "Could not load this view"}</strong>
+                  <p>{error.message}</p>
+                </div>
+              ) : !data ? (
+                <p className="loading">Loading…</p>
+              ) : (
+                <div className={loading ? "result-grid stale" : "result-grid"}>
+                  <div className="result-chart" role="tabpanel" aria-label={TAB_LABELS[tab]}>
+                    {tab === "calendar" && (
+                      <Calendar months={data.months} mode={view.mode} scale={view.scale} unit={data.meta.unit} footer={footer}
+                        onMode={(mode) => setView({ mode })} onScale={(scale) => setView({ scale })} />
+                    )}
+                    {tab === "seasonal" && <SeasonalProfile months={data.months} unitShort={unitShort} footer={footer} />}
+                    {tab === "annual" && <AnnualTotals months={data.months} unitShort={unitShort} footer={footer} />}
+                    {tab === "sensors" && (
+                      <SensorPanel months={data.months} unitShort={unitShort} footer={footer} agg={view.agg} onAgg={(agg) => setView({ agg })} />
+                    )}
+                  </div>
+                  <aside className="result-guide" aria-label={GUIDES[tab].title}>
+                    <h3>{GUIDES[tab].title}</h3>
+                    {GUIDES[tab].body}
+                  </aside>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
       </div>
 
-      {modal === "methods" && (
-        <Modal title="Methods" onClose={() => setModal(null)}>
-          <p>Both sensors are cleaned (MODIS confidence ≥ 30; VIIRS nominal or high; vegetation fires only where the type is known) and counted per month on a shared 0.1° grid.</p>
-          <p>Data: the FIRMS yearly country archives (MODIS from 1 November 2000, VIIRS S-NPP from 20 January 2012, NOAA-20 from 1 April 2018, through 2022) and the FIRMS archive downloads for 13 November 2022 to 13 November 2026, whole world. Months without data for a satellite are shown as not observed, never as zero fires. Standard processing throughout, then near-real-time for the last months.</p>
-          <p>VIIRS (S-NPP, NOAA-20, NOAA-21) sees roughly three to four times more hotspots than MODIS for the same fires, because its pixels are smaller. The harmonized value converts VIIRS to MODIS-equivalent units, so the record can continue on VIIRS alone once MODIS stops. The conversion is fitted per 1° tile and calendar month where MODIS and VIIRS both observed, falling back to the 30° world block and then the whole world where data is sparse. Three methods compete (Theil–Sen log-log, quantile mapping, ratio); the one with the lowest leave-one-year-out error is used for each block.</p>
-          <p>The uncertainty band is the 5th–95th percentile of those held-out errors. The sensor transparency chart compares raw MODIS, raw VIIRS and the harmonized series over the overlap.</p>
-          <p>Full write-up: METHODS.md in the project repository.</p>
-        </Modal>
-      )}
       {modal === "about" && (
-        <Modal title="Data & credits" onClose={() => setModal(null)}>
+        <Modal title="About this project" onClose={() => setModal(null)}>
+          <img className="team-banner" src="./brand/sunders-banner.jpg" alt="Team Sunders banner" width={648} height={406} />
+          <p><strong>Burning Calendar</strong> was built by team <strong>Sunders</strong> for the <strong>NASA Space Apps Challenge 2026</strong>, for the challenge <em>Harmonization of MODIS and VIIRS Hot Spots</em>.</p>
+          <p>NASA satellites have watched fires from space since 2000. The older MODIS instruments (on Terra and Aqua) see the Earth in 1 km pixels; the newer VIIRS instruments (on S-NPP, NOAA-20 and NOAA-21) use 375 m pixels and report about four times more hotspots for the same fires. Put on one chart, the two records disagree, and the change of satellite looks like a change in burning.</p>
+          <p>This site converts VIIRS detections into MODIS units, separately for every part of the world and season, and checks the conversion on years it was not trained on. The result is one consistent fire record that can continue on VIIRS after MODIS retires. Choose any area to see its burning calendar: when fires happen, and whether a month was unusual.</p>
+          <h3>Data and credits</h3>
           <p>{regions?.citation}</p>
           <p>We acknowledge the use of data and imagery from LANCE FIRMS operated by NASA&apos;s Goddard Space Flight Center Earth Science Data and Information System (ESDIS) with funding provided by NASA Headquarters.</p>
           <p>Daily true-colour imagery and Blue Marble: NASA EOSDIS Global Imagery Browse Services (GIBS). Background imagery: EOxCloudless by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2024), CC BY-NC-SA 4.0. Black Marble night lights: NASA EOSDIS GIBS. Streets map and place names: data © OpenStreetMap contributors and others, rendering © EOX (maps.eox.at).</p>
           <p>This is an independent NASA Space Apps Challenge project, not an official NASA product.</p>
+        </Modal>
+      )}
+      {modal === "guide" && (
+        <Modal title="How to read this site" onClose={() => setModal(null)}>
+          <FullGuide />
+        </Modal>
+      )}
+      {modal === "contact" && (
+        <Modal title="Contact team Sunders" onClose={() => setModal(null)}>
+          <p>Questions, ideas or feedback about Burning Calendar? Write to us:</p>
+          <ul className="contact-list">
+            {CONTACTS.map((m) => <li key={m}><Icon d={ICONS.mail} /> <a href={`mailto:${m}`}>{m}</a></li>)}
+          </ul>
+          <p>Our team page on the NASA Space Apps Challenge site:</p>
+          <p><a href={TEAM_PAGE} target="_blank" rel="noopener noreferrer">{TEAM_PAGE}</a></p>
         </Modal>
       )}
     </div>
@@ -495,4 +624,3 @@ function methodsText(data: Data, selLabel: string, from: string, to: string): st
     "", `Pipeline run ${data.meta.pipeline_run_utc}.`, data.meta.citation,
   ].join("\n");
 }
-

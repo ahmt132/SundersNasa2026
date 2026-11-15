@@ -1,8 +1,11 @@
 // Data layer for the static website. Everything is computed in the browser from the files
 // written by `python -m pipeline.run export-static` (see pipeline/export_static.py), so the site
-// runs on plain web hosting such as GoDaddy cPanel. The numbers are the same ones the FastAPI
-// service returns: region selections use the exact precomputed region series; custom areas are
-// summed from 0.1-degree grid cells whose centre lies inside the shape.
+// runs on static hosting (Cloudflare Pages for the page, Cloudflare R2 for the data). Box-shaped
+// selections use the precomputed series of the world blocks they contain; other parts are summed
+// from 0.1-degree grid cells whose centre lies inside the shape.
+
+import { QUICK_AREAS } from "./areas";
+import { type Cell, xlsxBlob } from "./xlsx";
 
 export type Metric = "count" | "celldays";
 
@@ -46,32 +49,16 @@ export interface Meta {
   approximate: boolean; // custom area summed from grid cells
 }
 
-export interface Kpis {
-  n_months: number;
-  n_complete_months: number;
-  totals: { harmonized: number; modis_raw: number; viirs_snpp_raw: number; viirs_n20_raw: number; viirs_n21_raw: number };
-  latest_month?: {
-    month: string;
-    value: number;
-    historical_median: number | null;
-    ratio_to_median: number | null;
-    percentile_rank: number | null;
-    n_other_years: number;
-  };
-  peak_month?: { moy: number; value: number; basis: "median" | "mean" };
-  record_year?: { year: number; value: number; n_complete_years: number };
-}
-
 export interface RegionInfo {
   id: string;
   name: string;
   bbox: [number, number, number, number];
-  start: string;
-  end: string;
+  group: string;
 }
 
 export interface RegionsResponse {
   data_range: { start: string; end: string };
+  first_day: string | null;
   last_day: string | null;
   regions: RegionInfo[];
   citation: string;
@@ -120,28 +107,75 @@ interface Index {
   predictors: string[];
   sats: string[];
   uncertainty: Record<string, (string | number | null)[]>;
+  coverage: { region: string; series: string; first: string; last: string }[];
   regions: RegionIndex[]; // world blocks that hold data
-  presets: { id: string; name: string; bbox: [number, number, number, number] }[];
   map_tiles: { n: number };
   recent: Record<string, { n: number }>;
 }
 
 type SeriesFile = Record<string, (string | number | boolean | null)[]>;
 
-const DATA = `${import.meta.env.BASE_URL}data`;
+// Where the data files live. Set VITE_DATA_URL at build time (for example
+// https://data.example.org) when the data is served from a Cloudflare R2 bucket; without it the
+// site reads the data folder next to the page (local development, `npm run dev`).
+const DATA = String(import.meta.env.VITE_DATA_URL || `${import.meta.env.BASE_URL}data`).replace(/\/+$/, "");
 const cache = new Map<string, Promise<unknown>>();
+
+// ---- download progress (for the loading screen)
+// Bytes are counted as they arrive. Content-Length is the size on the wire; when the server
+// compresses a file the decoded stream is longer, so each file's count is capped at its length.
+export interface LoadProgress { received: number; expected: number; active: number }
+const prog = { received: 0, expected: 0, active: 0 };
+const progListeners = new Set<(p: LoadProgress) => void>();
+const emitProgress = () => progListeners.forEach((f) => f({ ...prog }));
+export function onLoadProgress(f: (p: LoadProgress) => void): () => void {
+  progListeners.add(f);
+  f({ ...prog });
+  return () => void progListeners.delete(f);
+}
+
+async function readCounted(r: Response): Promise<ArrayBuffer> {
+  const len = Number(r.headers.get("content-length")) || 0;
+  prog.active++;
+  prog.expected += len;
+  emitProgress();
+  let counted = 0;
+  try {
+    if (!r.body) return await r.arrayBuffer();
+    const reader = r.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.length;
+      const add = (len ? Math.min(total, len) : 0) - counted;
+      if (add > 0) { counted += add; prog.received += add; emitProgress(); }
+    }
+    const out = new Uint8Array(total);
+    let o = 0;
+    for (const c of chunks) { out.set(c, o); o += c.length; }
+    return out.buffer;
+  } finally {
+    prog.received += len - counted; // finished (or failed): the file no longer counts as pending
+    prog.active--;
+    emitProgress();
+  }
+}
 
 function load<T>(path: string, kind: "json" | "bin"): Promise<T> {
   if (!cache.has(path)) {
     const p = fetch(`${DATA}/${path}`)
-      .then((r) => {
+      .then(async (r) => {
         if (!r.ok) throw new ApiError(r.status, "missing_file", `Data file ${path} could not be loaded (${r.status}).`);
-        return kind === "json" ? r.json() : r.arrayBuffer();
+        const buf = await readCounted(r);
+        return kind === "json" ? JSON.parse(new TextDecoder().decode(buf)) : buf;
       })
       .catch((e) => {
         cache.delete(path);
         if (e instanceof ApiError) throw e;
-        throw new ApiError(0, "unreachable", `Data file ${path} could not be loaded. Check that the data folder was uploaded.`);
+        throw new ApiError(0, "unreachable", `Data file ${path} could not be loaded. Check that the data was uploaded and that the data address allows this site (CORS).`);
       });
     cache.set(path, p);
   }
@@ -295,15 +329,13 @@ export async function fetchRegions(): Promise<RegionsResponse> {
   const idx = await index();
   return {
     data_range: idx.data_range,
+    // first observed day of any satellite (the month range starts on the 1st of that month)
+    first_day: idx.coverage.length ? idx.coverage.map((c) => c.first).sort()[0] : null,
     last_day: idx.last_day,
-    // the area menu lists the named shortcuts; the world blocks stay internal
-    regions: idx.presets.map(({ id, name, bbox }) => ({ id, name, bbox, start: idx.data_range.start, end: idx.data_range.end })),
+    // the area menu lists the quick areas (src/areas.ts); the world blocks stay internal
+    regions: QUICK_AREAS,
     citation: idx.citation,
   };
-}
-
-export async function lastDay(): Promise<string | null> {
-  return (await index()).last_day;
 }
 
 const SERIES_OUT = ["modis", "terra", "aqua", "viirs_snpp", "viirs_n20", "viirs_n21"] as const;
@@ -409,7 +441,7 @@ export function fetchCalendar(q: Query): Promise<Computed> {
 
 async function compute(q: Query): Promise<Computed> {
   const idx = await index();
-  const shape = shapeOf(q.sel, idx.presets as RegionInfo[]);
+  const shape = shapeOf(q.sel, QUICK_AREAS);
   const hit = idx.regions.filter((r) => overlaps(shape.bbox, r.bbox));
   if (!hit.length)
     throw new ApiError(404, "outside_coverage", "No fire detections exist anywhere in this area in the supplied data.");
@@ -463,58 +495,6 @@ async function compute(q: Query): Promise<Computed> {
       pipeline_run_utc: idx.pipeline_run_utc, served_utc: idx.generated_utc, citation: idx.citation, approximate,
     },
   };
-}
-
-/** Key figures (port of api/store.py Store.summary). */
-export function summarize(months: MonthRow[]): Kpis {
-  const done = months.filter((m) => !m.partial && m.harmonized != null);
-  const sum = (f: (m: MonthRow) => number | null) => months.reduce((s, m) => s + (f(m) ?? 0), 0);
-  const out: Kpis = {
-    n_months: months.length, n_complete_months: done.length,
-    totals: {
-      harmonized: sum((m) => m.harmonized), modis_raw: sum((m) => m.modis_raw),
-      viirs_snpp_raw: sum((m) => m.viirs_snpp_raw), viirs_n20_raw: sum((m) => m.viirs_n20_raw), viirs_n21_raw: sum((m) => m.viirs_n21_raw),
-    },
-  };
-  if (!done.length) return out;
-  const med = (v: number[]) => {
-    const s = [...v].sort((a, b) => a - b);
-    return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
-  };
-  const ref = done[done.length - 1];
-  const others = done.filter((m) => m.moy === ref.moy && m.month !== ref.month).map((m) => m.harmonized!);
-  const median = others.length ? med(others) : null;
-  out.latest_month = {
-    month: ref.month, value: ref.harmonized!, historical_median: median,
-    ratio_to_median: median ? ref.harmonized! / median : null,
-    percentile_rank: others.length ? (100 * others.filter((v) => v <= ref.harmonized!).length) / others.length : null,
-    n_other_years: others.length,
-  };
-  const byMoy = (f: (v: number[]) => number) =>
-    Array.from({ length: 12 }, (_, i) => {
-      const v = done.filter((m) => m.moy === i + 1).map((m) => m.harmonized!);
-      return v.length ? f(v) : -Infinity;
-    });
-  let basis: "median" | "mean" = "median";
-  let vals = byMoy(med);
-  if (Math.max(...vals) === 0) {
-    basis = "mean";
-    vals = byMoy((v) => v.reduce((a, b) => a + b, 0) / v.length);
-  }
-  if (Math.max(...vals) > 0) out.peak_month = { moy: vals.indexOf(Math.max(...vals)) + 1, value: Math.max(...vals), basis };
-  const years = new Map<number, number[]>();
-  done.forEach((m) => years.set(m.year, [...(years.get(m.year) ?? []), m.harmonized!]));
-  const full = [...years.entries()].filter(([, v]) => v.length === 12).map(([y, v]) => [y, v.reduce((a, b) => a + b, 0)] as const);
-  if (full.length) {
-    const best = full.reduce((a, b) => (b[1] > a[1] ? b : a));
-    out.record_year = { year: best[0], value: best[1], n_complete_years: full.length };
-  }
-  return out;
-}
-
-export async function fetchSummary(q: Query): Promise<{ meta: Meta; kpis: Kpis }> {
-  const c = await fetchCalendar(q);
-  return { meta: c.meta, kpis: summarize(c.months) };
 }
 
 export interface View {
@@ -578,15 +558,33 @@ export interface Point { lon: number; lat: number; sat: string; date: string; ti
 const CONF = (c: number) => (c === 201 ? "low" : c === 202 ? "nominal" : c === 203 ? "high" : String(c));
 const dayText = (year: number, day: number) => new Date(Date.UTC(year, 0, 1 + day)).toISOString().slice(0, 10);
 
-export interface PointsResult { points: Point[]; truncated: boolean; zoomIn: boolean }
+export interface PointsResult {
+  points: Point[];
+  total: number;      // detections in the window and the visible area
+  modis: number;      // of which MODIS (Terra, Aqua); the rest are VIIRS
+  stride: number;     // 1 = all drawn; N = every Nth detection drawn (even sample across the window)
+  zoomIn: boolean;    // older dates need a zoomed-in map
+}
+
+const inView = (v: View | null) => (lon: number, lat: number) =>
+  !v || (lon >= v.bounds[0] && lon <= v.bounds[2] && lat >= v.bounds[1] && lat <= v.bounds[3]);
+
+function thin(all: Point[], cap: number): Pick<PointsResult, "points" | "total" | "stride" | "modis"> {
+  const modis = all.filter((p) => p.sat === "Terra" || p.sat === "Aqua").length;
+  if (all.length <= cap) return { points: all, total: all.length, stride: 1, modis };
+  const stride = Math.ceil(all.length / cap);
+  return { points: all.filter((_, i) => i % stride === 0), total: all.length, stride, modis };
+}
 
 /**
- * Detections between two dates (inclusive, YYYY-MM-DD). The latest days come from small worldwide
- * day files; older dates are read from the world blocks on screen, so they need a zoomed-in map.
+ * Detections between two dates (inclusive, YYYY-MM-DD) inside the visible map area. The latest days
+ * come from small worldwide day files; older dates are read from the world blocks on screen, so
+ * they need a zoomed-in map. Above `cap` points an even sample is drawn and reported.
  */
 export async function fetchPoints(d0: string, d1: string, view: View | null, cap = 200_000): Promise<PointsResult> {
   const idx = await index();
-  const points: Point[] = [];
+  const all: Point[] = [];
+  const keep = inView(view);
   const days: string[] = [];
   for (let d = d0; d <= d1; d = new Date(Date.parse(`${d}T00:00:00Z`) + 864e5).toISOString().slice(0, 10)) days.push(d);
   if (days.every((d) => idx.recent[d] || (idx.last_day && d > idx.last_day))) {
@@ -596,38 +594,47 @@ export async function fetchPoints(d0: string, d1: string, view: View | null, cap
       const buf = await load<ArrayBuffer>(`recent/${d}.bin`, "bin");
       const c = columns(buf, meta.n, [["lat", "i32"], ["lon", "i32"], ["frp", "f32"], ["time", "u16"], ["sat", "u8"], ["conf", "u8"]]);
       for (let i = 0; i < meta.n; i++) {
-        if (points.length >= cap) return { points, truncated: true, zoomIn: false };
-        points.push({ lon: c.lon[i] / 1e5, lat: c.lat[i] / 1e5, sat: idx.sats[c.sat[i]], date: d,
-          time: String(c.time[i]).padStart(4, "0"), frp: c.frp[i], conf: CONF(c.conf[i]) });
+        const lon = c.lon[i] / 1e5, lat = c.lat[i] / 1e5;
+        if (!keep(lon, lat)) continue;
+        all.push({ lon, lat, sat: idx.sats[c.sat[i]], date: d, time: String(c.time[i]).padStart(4, "0"), frp: c.frp[i], conf: CONF(c.conf[i]) });
       }
     }
-    return { points, truncated: false, zoomIn: false };
+    return { ...thin(all, cap), zoomIn: false };
   }
   const blocks = view ? blocksInView(idx, view) : [];
-  if (!view || !blocks.length || blocks.length > MAX_VIEW_BLOCKS) return { points, truncated: false, zoomIn: true };
-  const [w, s, e, n] = view.bounds;
+  if (!view || !blocks.length || blocks.length > MAX_VIEW_BLOCKS) return { points: [], total: 0, stride: 1, modis: 0, zoomIn: true };
   for (const r of blocks) {
     for (const [y, mo] of monthsBetween(d0, d1)) {
       const h = await hotspots(r, y, mo);
       if (!h) continue;
       for (let i = 0; i < h.n; i++) {
         const lon = h.lon[i] / 1e5, lat = h.lat[i] / 1e5;
-        if (lon < w || lon > e || lat < s || lat > n) continue;
+        if (!keep(lon, lat)) continue;
         const date = dayText(y, h.day[i]);
         if (date < d0 || date > d1) continue;
-        if (points.length >= cap) return { points, truncated: true, zoomIn: false };
-        points.push({ lon, lat, sat: idx.sats[h.sat[i]], date, time: String(h.time[i]).padStart(4, "0"), frp: h.frp[i], conf: CONF(h.conf[i]) });
+        all.push({ lon, lat, sat: idx.sats[h.sat[i]], date, time: String(h.time[i]).padStart(4, "0"), frp: h.frp[i], conf: CONF(h.conf[i]) });
       }
     }
   }
-  return { points, truncated: false, zoomIn: false };
+  return { ...thin(all, cap), zoomIn: false };
 }
 
-// ------------------------------------------------------------------ CSV exports
+// ------------------------------------------------------------------ exports (CSV and Excel)
 
 const MAX_EXPORT_ROWS = 500_000;
 
-function noteLines(meta: Meta, label: string, extra: string[]): string {
+/** One export as a table; written either as CSV (unchanged format) or as an Excel workbook. */
+interface ExportTable {
+  cols: string[];
+  rows: Cell[][];
+  notes: string[];
+  decimals: Record<string, number>;
+  widths: number[];
+}
+
+export type ExportFormat = "csv" | "xlsx";
+
+function noteList(meta: Meta, label: string, extra: string[]): string[] {
   return [
     "Burning calendar - harmonized MODIS + VIIRS active-fire hotspots",
     `Selection: ${label}; regions: ${meta.regions.join(", ")}`,
@@ -640,41 +647,58 @@ function noteLines(meta: Meta, label: string, extra: string[]): string {
     ...extra,
     `Pipeline run ${meta.pipeline_run_utc}; data files built ${meta.served_utc}; exported ${new Date().toISOString().slice(0, 19)}Z.`,
     meta.citation,
-  ].map((l) => `# ${l}\n`).join("");
+  ];
 }
 
-const csvCell = (v: unknown) => (v == null || (typeof v === "number" && !Number.isFinite(v)) ? "" : String(v));
+function toCsv(t: ExportTable): Blob {
+  const dec = t.cols.map((c) => t.decimals[c]);
+  const fmt = (v: Cell, d: number | undefined) =>
+    v == null ? "" : typeof v === "number" ? (!Number.isFinite(v) ? "" : d == null ? String(v) : v.toFixed(d)) : v;
+  const body = t.rows.map((r) => r.map((v, i) => fmt(v, dec[i])).join(",")).join("\n");
+  const notes = t.notes.map((l) => `# ${l}\n`).join("");
+  return new Blob([notes, t.cols.join(","), "\n", body, "\n"], { type: "text/csv;charset=utf-8" });
+}
 
-export async function calendarCsv(q: Query, label: string): Promise<Blob> {
+function toXlsx(t: ExportTable, dataName: string): Promise<Blob> {
+  return xlsxBlob([
+    { name: dataName, header: t.cols, rows: t.rows, decimals: t.decimals, widths: t.widths, freezeHeader: true },
+    { name: "Notes", header: ["About this file"], rows: t.notes.map((n) => [n]), widths: [140] },
+  ]);
+}
+
+const toText = (v: unknown): Cell => (v == null ? null : typeof v === "number" ? v : String(v));
+
+async function calendarTable(q: Query, label: string): Promise<ExportTable> {
   const { months, meta } = await fetchCalendar(q);
   const cols = ["month", "year", "moy", "harmonized", "lo", "hi", "modis_raw", "terra_raw", "aqua_raw", "viirs_snpp_raw",
     "viirs_n20_raw", "viirs_n21_raw", "source", "era", "method", "terra_only", "partial", "days_observed", "days_in_month"] as const;
-  const num = (v: number | null, d: number) => (v == null ? "" : v.toFixed(d));
-  const body = months.map((m) => cols.map((c) => {
+  const rows = months.map((m) => cols.map((c): Cell => {
     const v = m[c];
-    if (c === "harmonized" || c === "lo" || c === "hi") return num(v as number | null, 3);
-    if (c.endsWith("_raw")) return v == null ? "" : String(Math.round(v as number));
-    return csvCell(v);
-  }).join(",")).join("\n");
+    if (c.endsWith("_raw")) return v == null ? null : Math.round(v as number);
+    return toText(v);
+  }));
   const extra = [
     "Columns: harmonized = value to use; lo/hi = band; *_raw = unadjusted detections per sensor; source = sensor the " +
       "harmonized value comes from; partial = month not fully observed.",
     ...(meta.approximate ? ["Custom area: values are summed over 0.1-degree grid cells whose centre lies inside the shape."] : []),
   ];
-  return new Blob([noteLines(meta, label, extra), cols.join(","), "\n", body, "\n"], { type: "text/csv;charset=utf-8" });
+  return {
+    cols: [...cols], rows, notes: noteList(meta, label, extra),
+    decimals: { harmonized: 3, lo: 3, hi: 3 },
+    widths: [11, 6, 5, 12, 12, 12, 10, 10, 10, 14, 13, 13, 11, 15, 9, 10, 8, 13, 13],
+  };
 }
 
-export async function hotspotsCsv(q: Query, label: string): Promise<Blob> {
+async function hotspotsTable(q: Query, label: string): Promise<ExportTable> {
   const idx = await index();
   const { meta } = await fetchCalendar(q);
-  const shape = shapeOf(q.sel, idx.presets as RegionInfo[]);
+  const shape = shapeOf(q.sel, QUICK_AREAS);
   const d0 = `${q.from ?? idx.data_range.start}-01`;
   const endM = q.to ?? idx.data_range.end;
   const d1 = new Date(Date.UTC(Number(endM.slice(0, 4)), Number(endM.slice(5, 7)), 0)).toISOString().slice(0, 10);
   const C = idx.grid.cell_per_deg, k = C / idx.grid.tile_per_deg;
   const satSeries: Record<string, string> = { Terra: "terra", Aqua: "aqua", SNPP: "viirs_snpp", NOAA20: "viirs_n20", NOAA21: "viirs_n21" };
-  const lines: string[] = [];
-  let total = 0;
+  const rows: Cell[][] = [];
   for (const r of idx.regions.filter((r) => overlaps(shape.bbox, r.bbox))) {
     const series = await seriesFile(r.id);
     const sourceByMonth = new Map<number, string>();
@@ -690,7 +714,7 @@ export async function hotspotsCsv(q: Query, label: string): Promise<Blob> {
         if (!shape.contains(lon, lat)) continue;
         const date = dayText(y, h.day[i]);
         if (date < d0 || date > d1) continue;
-        if (++total > MAX_EXPORT_ROWS)
+        if (rows.length >= MAX_EXPORT_ROWS)
           throw new ApiError(413, "export_too_large", `More than ${MAX_EXPORT_ROWS.toLocaleString("en-US")} hotspots fall in this area and period. Shorten the period or draw a smaller area, then export again.`);
         const sat = idx.sats[h.sat[i]];
         const series = satSeries[sat];
@@ -702,23 +726,38 @@ export async function hotspotsCsv(q: Query, label: string): Promise<Blob> {
         const used = (observed || series === source) && veg;
         const tx = Math.floor(Math.floor((lon + 180) * C) / k), ty = Math.floor(Math.floor((lat + 90) * C) / k);
         const wt = !used ? 0 : observed ? 1 : weight.get(`${m}|${tx}|${ty}|${source}`) ?? null;
-        lines.push([
-          lat.toFixed(5), lon.toFixed(5), date, String(h.time[i]).padStart(4, "0"), sat === "Terra" || sat === "Aqua" ? "MODIS" : "VIIRS",
-          sat, h.proc[i] ? "NRT" : "SP", CONF(h.conf[i]), Number.isFinite(h.frp[i]) ? h.frp[i].toFixed(2) : "",
-          ["D", "N", ""][h.dn[i]], type ?? "", r.id, used ? "True" : "False", wt == null ? "" : wt.toFixed(5),
-        ].join(","));
+        rows.push([
+          lat, lon, date, String(h.time[i]).padStart(4, "0"), sat === "Terra" || sat === "Aqua" ? "MODIS" : "VIIRS",
+          sat, h.proc[i] ? "NRT" : "SP", CONF(h.conf[i]), Number.isFinite(h.frp[i]) ? h.frp[i] : null,
+          ["D", "N", ""][h.dn[i]], type, r.id, used ? "True" : "False", wt,
+        ]);
       }
     }
   }
-  if (!lines.length) throw new ApiError(404, "empty_selection", "No hotspots were detected inside this area in the chosen period.");
+  if (!rows.length) throw new ApiError(404, "empty_selection", "No hotspots were detected inside this area in the chosen period.");
   const extra = [
     "Rows: individual cleaned detections (MODIS confidence >= 30, VIIRS nominal/high), both sensors.",
     "harmonization_weight: what this detection adds to the harmonized count. The sum of this column equals the harmonized " +
       "total for the grid cells the detections fall in. 0 = not used (other sensor is the source that month, or a non-vegetation type).",
     "type (standard processing only): 0 vegetation fire, 1 volcano, 2 other static land source, 3 offshore.",
   ];
-  const header = "latitude,longitude,acq_date,acq_time,sensor,satellite,processing,confidence,frp_mw,daynight,type,region,in_harmonized_series,harmonization_weight";
-  return new Blob([noteLines(meta, label, extra), header, "\n", lines.join("\n"), "\n"], { type: "text/csv;charset=utf-8" });
+  return {
+    cols: ["latitude", "longitude", "acq_date", "acq_time", "sensor", "satellite", "processing", "confidence", "frp_mw",
+      "daynight", "type", "region", "in_harmonized_series", "harmonization_weight"],
+    rows, notes: noteList(meta, label, extra),
+    decimals: { latitude: 5, longitude: 5, frp_mw: 2, harmonization_weight: 5 },
+    widths: [10, 11, 11, 9, 7, 9, 10, 10, 8, 8, 5, 11, 18, 20],
+  };
+}
+
+export async function calendarExport(q: Query, label: string, format: ExportFormat): Promise<Blob> {
+  const t = await calendarTable(q, label);
+  return format === "csv" ? toCsv(t) : toXlsx(t, "Burning calendar");
+}
+
+export async function hotspotsExport(q: Query, label: string, format: ExportFormat): Promise<Blob> {
+  const t = await hotspotsTable(q, label);
+  return format === "csv" ? toCsv(t) : toXlsx(t, "Hotspots");
 }
 
 export function saveBlob(blob: Blob, name: string): void {

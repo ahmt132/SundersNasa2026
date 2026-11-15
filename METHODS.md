@@ -3,10 +3,12 @@
 How MODIS and VIIRS active-fire hotspots are merged into one monthly series, and why
 each choice was made. Every threshold named here is a line in `config/pipeline.toml`.
 
-> **Status of validation numbers.** The pipeline has been run end to end only on
-> synthetic test data (`tests/synthetic.py`). No real-data validation result is quoted
-> in this file. Real numbers are written to `reports/validation_metrics.csv` and
-> `reports/validation_<region>.png` when you run the pipeline on FIRMS downloads.
+> **Data in the current build.** FIRMS archive downloads for the whole world,
+> 13 Nov 2022 – 13 Nov 2026 (MODIS C6.1, VIIRS S-NPP, NOAA-20, NOAA-21). With these four
+> years only the VIIRS-transfer era (§7) is active; the Terra-only and observed-MODIS eras
+> (§6, §7) switch on automatically when files from before 2012 are added.
+> **Real validation results** from this data are in [VALIDATION.md](VALIDATION.md);
+> the raw tables are written to `reports/validation_metrics.csv`.
 
 ## 1. The problem
 
@@ -30,12 +32,14 @@ MODIS units were chosen as the common unit because MODIS is the only record cove
 | Standard-processing `type` = 0 only (toggle `include_nonveg_types`) | Types 1, 2, 3 are volcanoes, static industrial sources and offshore flares. They are not burning vegetation. NRT rows have no type and are kept. |
 | Standard processing (SP) beats near-real-time (NRT) | SP has better geolocation and quality control. For each satellite, NRT rows dated on or before the last SP day are dropped. |
 | Exact duplicates removed | Overlapping downloads repeat rows. Key: satellite, date, time, lat/lon rounded to 4 decimals. |
-| Rows outside the region bbox dropped | Lets you use a larger (e.g. country) download for a smaller region. |
+| Rows sorted into 30° world blocks | The world is split into 30° × 30° blocks (`[world] block_deg`); each block is processed like a region. 70 of the 72 blocks contain fire data. |
 
 SP and NRT are told apart by the `version` column (a letter suffix such as `NRT` means
-near-real-time). MODIS and VIIRS files are told apart by their brightness column
-(`brightness` vs `bright_ti4`). Counts dropped by each rule are saved in
-`data/processed/ingest_report.json`.
+near-real-time). The satellite is read from each row's `satellite` column (Terra, Aqua,
+SNPP/N, N20, N21); this matters because worldwide archive files name the VIIRS brightness
+column `brightness`, like MODIS, instead of `bright_ti4`. Counts dropped by each rule are
+saved in `data/processed/ingest_report.json` (current build: 250,817,275 rows read,
+27,714,468 low-confidence rows and 9,472 duplicates dropped, 223,093,335 kept).
 
 ## 3. Common unit (`pipeline/grid.py`)
 
@@ -69,7 +73,7 @@ All three return 0 for `x = 0`.
 **Hierarchy.** A fit is trusted only if its group has at least `min_pairs` (8) samples
 where both sensors saw fire. Each tile-month uses the finest level that qualifies:
 
-`tile x month-of-year` -> `region x month-of-year` -> `region` -> `all regions x month-of-year` -> `all regions`
+`tile x month-of-year` -> `block x month-of-year` -> `block` -> `world x month-of-year` -> `world`
 
 The level used is stored for every tile-month (`tile_weights`, column `level`).
 
@@ -129,6 +133,14 @@ harmonized value, a lower and upper bound, the source, the method, and flags
 **Partial months** (the current month, or a satellite's first month) hold only the days
 observed. They are flagged, not extrapolated.
 
+**Missing data is not zero.** A satellite month with no detections counts as *not
+observed* (not as "no fire") when another satellite *of the same instrument family* (Terra/Aqua, or the
+three VIIRS satellites) saw at least 50 detections in the same 30° block and month, or (for
+per-region downloads only) when the satellite has no detection in that region for a whole
+year. Worldwide, each satellite's coverage dates are taken from the whole archive rather than
+per block, so a quiet polar block is not mistaken for missing data. When more than one VIIRS
+satellite covers a month only partly, the one with the most observed days is used.
+
 ## 8. Uncertainty band (`pipeline/uncertainty.py`)
 
 The band is the 5th-95th percentile of held-out validation errors, expressed as a ratio
@@ -143,6 +155,8 @@ cover: fires neither sensor saw (cloud, smoke, timing), or error in observed-MOD
 
 ## 9. Known gaps in this method
 
+- With the current four-year build, leave-one-year-out has only four years to work with;
+  the test becomes much stronger with the full 2012–today overlap.
 - The transfer assumes the VIIRS:MODIS relationship learned in the overlap holds
   afterwards. Terra and Aqua have drifted to later/earlier overpass times in recent
   years, which changes what MODIS sees. Set `overlap_end` (e.g. `"2021-12"`) to fit on
@@ -158,5 +172,6 @@ cover: fires neither sensor saw (cloud, smoke, timing), or error in observed-MOD
 
 ```
 python -m pipeline.run all        # ingest + grid + harmonize, writes reports/
+python -m pipeline.run export-static   # files for the website (web/public/data)
 python -m pytest tests            # end-to-end check on synthetic data
 ```

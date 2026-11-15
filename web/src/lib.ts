@@ -1,25 +1,26 @@
 // Shared tokens, formatting, colour scales and small statistics used by every chart.
-import { interpolateInferno, interpolateLab, piecewise } from "d3";
+import { interpolateInferno, interpolateLab, piecewise, rgb } from "d3";
 import type { MonthRow, RegionInfo, Selection } from "./api";
 
 // ---- design tokens (mirrored in styles.css; charts need them as literals so SVG exports are self-contained)
 export const T = {
-  bg: "#1a1b1d",
-  surface: "#222326",
-  raised: "#2e3034",
-  hairline: "#3a3d42",
-  ink: "#e8e6e3",
-  ink2: "#aeaca7",
-  ink3: "#85837f",
+  bg: "#10142a",
+  surface: "#12162a",
+  raised: "#20263f",
+  hairline: "#2e3556",
+  ink: "#efece6",
+  ink2: "#b8b6c8",
+  ink3: "#8c8aa3",
   accent: "#d9641f", // harmonized series and the primary action - nothing else
   modis: "#3f97d1",
   viirs: "#b8669a",
-  zero: "#33363b", // a month with data and zero detections
-  sans: "'IBM Plex Sans', system-ui, sans-serif",
-  mono: "'IBM Plex Mono', ui-monospace, monospace",
+  zero: "#262c48", // a month with data and zero detections
+  sans: "'Times New Roman', Times, serif",
+  mono: "'Times New Roman', Times, serif",
 };
-// Categorical trio validated with the dataviz palette validator on surface #222326 (dark mode):
-// lightness band, chroma floor, CVD separation (worst dE 8.7 deutan), contrast >= 3:1 all pass.
+// Categorical trio validated with the dataviz palette validator on surface #222326 (dark mode); the
+// surface is now navy #12162a and the check was re-run on it (2026-11-15): lightness band, chroma
+// floor, CVD separation (worst dE 8.7 deutan), normal-vision floor, contrast >= 3:1 all pass.
 
 export const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 export const MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
@@ -31,6 +32,14 @@ const nf1 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
 export function fmt(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return "–";
   return Math.abs(v) < 10 && !Number.isInteger(v) ? nf1.format(v) : nf0.format(v);
+}
+/** Short numbers for legends where space is tight: 950, 1.2k, 12k, 203k, 1.4M. */
+export function fmtCompact(v: number): string {
+  const a = Math.abs(v);
+  const short = (x: number, unit: string) => `${x < 10 ? nf1.format(x) : nf0.format(x)}${unit}`;
+  if (a >= 1e6) return short(v / 1e6, "M");
+  if (a >= 1e3) return short(v / 1e3, "k");
+  return fmt(v);
 }
 export function fmtAxis(v: number): string {
   if (Math.abs(v) >= 1e6) return `${nf1.format(v / 1e6)}M`;
@@ -121,23 +130,42 @@ export const ANOMALY_CLAMP = 3; // colour saturates at 8x above / below the medi
 export interface ValueScale {
   color: (v: number) => string;
   kind: "log" | "quantile";
+  min: number; // smallest month above zero
   max: number;
+  /** Position 0..1 of a value on the colour ramp (log scale). */
+  pos: (v: number) => number;
   breaks: number[]; // quantile class edges (empty for log)
   classes: string[];
+}
+
+/** The colour ramp starts a little above black, so the quietest month still differs from "zero". */
+export const RAMP_START = 0.08;
+export const rampColor = (t: number) => inferno(RAMP_START + (1 - RAMP_START) * Math.max(0, Math.min(1, t)));
+
+/** Dark or light text, whichever reads better on the given fill colour. */
+export function textOn(fill: string): string {
+  const c = rgb(fill);
+  const lin = (v: number) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+  const lum = 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+  return lum > 0.22 ? "#14110f" : "#f6f2ec";
 }
 
 export function makeValueScale(values: number[], kind: "log" | "quantile"): ValueScale {
   const pos = values.filter((v) => v > 0).sort((a, b) => a - b);
   const max = pos.length ? pos[pos.length - 1] : 1;
+  const min = pos.length ? pos[0] : 1;
+  // Log scale stretched between the quietest and the busiest month of THIS selection, so a large
+  // area (every month in the thousands) still uses the whole colour range.
+  const L0 = Math.log(min), L1 = Math.log(max);
+  const at = (v: number) => (L1 > L0 ? (Math.log(Math.max(v, min)) - L0) / (L1 - L0) : 1);
   if (kind === "log" || pos.length < 7) {
-    const denom = Math.log1p(max) || 1;
-    return { kind: "log", max, breaks: [], classes: [], color: (v) => (v > 0 ? inferno(Math.log1p(v) / denom) : T.zero) };
+    return { kind: "log", min, max, pos: at, breaks: [], classes: [], color: (v) => (v > 0 ? rampColor(at(v)) : T.zero) };
   }
   const n = 7; // no more than ~7 colour classes stay distinguishable
   const breaks = Array.from({ length: n - 1 }, (_, i) => quantile(pos, (i + 1) / n));
-  const classes = Array.from({ length: n }, (_, i) => inferno(i / (n - 1)));
+  const classes = Array.from({ length: n }, (_, i) => rampColor(i / (n - 1)));
   return {
-    kind: "quantile", max, breaks, classes,
+    kind: "quantile", min, max, pos: at, breaks, classes,
     color: (v) => (v > 0 ? classes[breaks.filter((b) => v > b).length] : T.zero),
   };
 }

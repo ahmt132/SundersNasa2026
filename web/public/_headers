@@ -1,0 +1,8 @@
+# Cloudflare Pages response headers for the page itself (the data comes from R2, see
+# docs/DEPLOY_CLOUDFLARE.md). Hashed build files never change, so they are cached for a year.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin

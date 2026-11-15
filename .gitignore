@@ -12,3 +12,5 @@ dist/
 # Local only
 share/
 .env
+# design experiments (local only)
+design/
