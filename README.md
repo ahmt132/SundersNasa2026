@@ -1,4 +1,4 @@
-# Burning Calendar
+# Harmonic Heat
 
 **One consistent fire record from two generations of NASA satellites.**
 NASA Space Apps Challenge 2026 — *Harmonization of MODIS and VIIRS Hot Spots*.
@@ -23,7 +23,7 @@ fire record has to cross that seam.
    *MODIS-equivalent* hotspots, separately for every 1° tile and month of the year, using
    whichever of three methods (quantile mapping, Theil–Sen, ratio) predicts best on
    held-out years. Every result carries an uncertainty band.
-2. **A website, the "burning calendar"**: a world map of recent hotspots plus a
+2. **A website with a "burning calendar"**: a world map of recent hotspots plus a
    month × year calendar of harmonized fire activity for any area you choose — one of 25 quick
    areas (continents and well-known fire regions), a rectangle, a polygon or a point with a
    radius. Each square shows its value; a "compared with usual" mode shows how each month differs

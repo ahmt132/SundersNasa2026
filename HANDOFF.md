@@ -1,4 +1,4 @@
-# Burning Calendar – handoff notes (15 Nov 2026)
+# Harmonic Heat – handoff notes (15 Nov 2026)
 
 NASA Space Apps 2026, "Harmonization of MODIS and VIIRS Hot Spots".
 A static website that turns MODIS + VIIRS active-fire detections into one consistent monthly

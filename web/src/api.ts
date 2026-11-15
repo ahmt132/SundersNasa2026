@@ -802,7 +802,7 @@ export type ExportFormat = "csv" | "xlsx";
 
 function noteList(meta: Meta, label: string, extra: string[]): string[] {
   return [
-    "Burning calendar - harmonized MODIS + VIIRS active-fire hotspots",
+    "Harmonic Heat - harmonized MODIS + VIIRS active-fire hotspots",
     `Selection: ${label}; regions: ${meta.regions.join(", ")}`,
     `Unit: ${meta.unit}`,
     "Data: FIRMS yearly country archives (MODIS 2000-2022, S-NPP 2012-2022, NOAA-20 2018-2022) and FIRMS archive downloads 2022-11-13 to 2026-11-13, whole world. " +

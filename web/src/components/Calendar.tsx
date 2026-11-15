@@ -148,7 +148,7 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
 
   return (
     <ChartFrame
-      hero title={title} subtitle={subtitle} footer={footer} exportName={`burning-calendar-${mode}`} svgRef={svgRef}
+      hero title={title} subtitle={subtitle} footer={footer} exportName={`harmonic-heat-calendar-${mode}`} svgRef={svgRef}
       controls={
         <>
           <Segmented label="Calendar mode" value={mode} onChange={onMode}

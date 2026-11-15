@@ -284,7 +284,7 @@ export default function App() {
     flash(kind === "hotspots" ? "Preparing hotspot file…" : "Preparing calendar file…");
     try {
       const blob = kind === "calendar" ? await calendarExport(query, selLabel, format) : await hotspotsExport(query, selLabel, format);
-      saveBlob(blob, kind === "calendar" ? `burning_calendar_${view.metric}.${format}` : `hotspots.${format}`);
+      saveBlob(blob, kind === "calendar" ? `harmonic_heat_calendar_${view.metric}.${format}` : `hotspots.${format}`);
       flash("Download ready.");
     } catch (e) {
       flash((e as Error).message);
@@ -292,7 +292,7 @@ export default function App() {
   };
   const methodsNote = () => {
     if (!data) return;
-    saveBlob(new Blob([methodsText(data, selLabel, from, to)], { type: "text/plain;charset=utf-8" }), "burning-calendar-methods.txt");
+    saveBlob(new Blob([methodsText(data, selLabel, from, to)], { type: "text/plain;charset=utf-8" }), "harmonic-heat-methods.txt");
   };
   const applyPoint = (e: FormEvent) => {
     e.preventDefault();
@@ -327,7 +327,7 @@ export default function App() {
         <div className="brand">
           <img className="mark" src="./brand/planet-logo-v2.png" alt="" width={38} height={38} />
           <div>
-            <div className="brand-name">Burning Calendar</div>
+            <div className="brand-name">Harmonic Heat</div>
             <div className="brand-sub">NASA Space Apps Challenge 2026 · team Sunders</div>
           </div>
         </div>
@@ -570,7 +570,7 @@ export default function App() {
       {modal === "about" && (
         <Modal title="About this project" onClose={() => setModal(null)}>
           <img className="team-banner" src="./brand/sunders-banner.jpg" alt="Team Sunders banner" width={648} height={406} />
-          <p><strong>Burning Calendar</strong> was built by team <strong>Sunders</strong> for the <strong>NASA Space Apps Challenge 2026</strong>, for the challenge <em>Harmonization of MODIS and VIIRS Hot Spots</em>.</p>
+          <p><strong>Harmonic Heat</strong> was built by team <strong>Sunders</strong> for the <strong>NASA Space Apps Challenge 2026</strong>, for the challenge <em>Harmonization of MODIS and VIIRS Hot Spots</em>.</p>
           <p>NASA satellites have watched fires from space since 2000. The older MODIS instruments (on Terra and Aqua) see the Earth in 1 km pixels; the newer VIIRS instruments (on S-NPP, NOAA-20 and NOAA-21) use 375 m pixels and report about four times more hotspots for the same fires. Put on one chart, the two records disagree, and the change of satellite looks like a change in burning.</p>
           <p>This site converts VIIRS detections into MODIS units, separately for every part of the world and season, and checks the conversion on years it was not trained on. The result is one consistent fire record that can continue on VIIRS after MODIS retires. Choose any area to see its burning calendar: when fires happen, and whether a month was unusual.</p>
           <h3>Data and credits</h3>
@@ -587,7 +587,7 @@ export default function App() {
       )}
       {modal === "contact" && (
         <Modal title="Contact team Sunders" onClose={() => setModal(null)}>
-          <p>Questions, ideas or feedback about Burning Calendar? Write to us:</p>
+          <p>Questions, ideas or feedback about Harmonic Heat? Write to us:</p>
           <ul className="contact-list">
             {CONTACTS.map((m) => <li key={m}><Icon d={ICONS.mail} /> <a href={`mailto:${m}`}>{m}</a></li>)}
           </ul>
@@ -601,7 +601,7 @@ export default function App() {
 
 function methodsText(data: Data, selLabel: string, from: string, to: string): string {
   return [
-    "Burning calendar - methods note", "",
+    "Harmonic Heat - methods note", "",
     `Area: ${selLabel}`, `Period: ${from} to ${to}`, `Unit: ${data.meta.unit}`, "",
     "What the numbers are",
     "- Hotspots are satellite pixel detections of active fire, not individual fires.",
