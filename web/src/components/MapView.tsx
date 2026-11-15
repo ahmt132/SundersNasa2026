@@ -1,7 +1,7 @@
 // Full-screen map: satellite basemaps, daily true-colour imagery, hotspot points, the harmonized
 // grid layer, the selected area, and the drawing tools (rectangle, polygon, click-to-place point).
 import {
-  GeolocateControl, Map as MlMap, Marker, NavigationControl, Popup, ScaleControl, setWorkerUrl,
+  Map as MlMap, Marker, NavigationControl, Popup, ScaleControl, setWorkerUrl,
   type GeoJSONSource, type ImageSource, type LngLat, type MapMouseEvent, type MapTouchEvent, type StyleSpecification,
 } from "maplibre-gl";
 // MapLibre 6 ships its worker as a separate file and finds it next to its own module URL.
@@ -201,7 +201,6 @@ export function MapView(p: Props) {
     });
     mapRef.current = map;
     map.addControl(new NavigationControl({ showCompass: false }), "top-left");
-    map.addControl(new GeolocateControl({ positionOptions: { enableHighAccuracy: false } }), "top-left");
     map.addControl(new ScaleControl({ unit: "metric", maxWidth: 130 }), "bottom-left");
     map.addControl(new ScaleControl({ unit: "imperial", maxWidth: 130 }), "bottom-left");
 
