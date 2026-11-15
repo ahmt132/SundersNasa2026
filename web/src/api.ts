@@ -64,13 +64,17 @@ export interface RegionsResponse {
   citation: string;
 }
 
+/** Map layer: harmonized total per grid cell over the period, as a dense grid. */
 export interface CellsResponse {
   cell_deg: number;
   start: string;
   end: string;
-  west: number[];
-  south: number[];
-  value: number[];
+  west: number;          // longitude of the grid's west edge
+  south: number;         // latitude of the grid's south edge
+  nx: number;
+  ny: number;
+  grid: Float32Array;    // nx * ny values, row 0 = southernmost; 0 = no fire
+  max: number;
 }
 
 export interface Query {
@@ -89,7 +93,10 @@ export class ApiError extends Error {
 // ------------------------------------------------------------------ files
 
 interface RegionIndex extends RegionInfo {
-  files: { cells_h: { n: number }; cells_raw: { n: number } };
+  files: {
+    cells_h: { n: number }; cells_raw: { n: number };
+    hall?: { n: number }; hy?: { n: number }; hm?: Record<string, { n: number }>;
+  };
   hot: Record<string, { n: number; bytes: number; last: string }>;
   last_day: string | null;
 }
@@ -110,6 +117,9 @@ interface Index {
   coverage: { region: string; series: string; first: string; last: string }[];
   regions: RegionIndex[]; // world blocks that hold data
   map_tiles: { n: number };
+  map_tiles_all?: { n: number };
+  map_tiles_y?: { n: number };
+  map_tiles_m?: Record<string, { n: number }>;
   recent: Record<string, { n: number }>;
 }
 
@@ -513,42 +523,94 @@ const blocksInView = (idx: Index, v: View) => idx.regions.filter((r) => overlaps
  * Harmonized total over the period for the map layer. Zoomed out: 1-degree tiles for the whole world
  * (one small file). Zoomed in: 0.1-degree cells, read only for the world blocks on screen.
  */
+type AddFn = (x: number, y: number, v: number) => void;
+const SPLIT_COLS: [string, "u16" | "f32"][] = [["t", "u16"], ["x", "u16"], ["y", "u16"], ["hc", "f32"], ["hd", "f32"]];
+
+/**
+ * Add the map values of months m0..m1 from one year-split file set (see export_static.export_map):
+ * the all-months total when the period covers the whole record, per-year sums for years the period
+ * covers completely, and the monthly file only for a year the period cuts through. So the default view
+ * reads one small file and a single month reads one year's file, not 26 years of months.
+ */
+async function addSplit(base: string, split: { all?: { n: number }; y?: { n: number }; m?: Record<string, { n: number }> },
+  m0: number, m1: number, d0: number, d1: number, metric: Metric, add: AddFn): Promise<void> {
+  const pick = (c: Record<string, ArrayLike<number>>) => (metric === "count" ? c.hc : c.hd);
+  const run = (buf: ArrayBuffer, n: number, keep: (t: number) => boolean) => {
+    const c = columns(buf, n, SPLIT_COLS);
+    const v = pick(c);
+    for (let i = 0; i < n; i++) if (v[i] > 0 && keep(c.t[i])) add(c.x[i], c.y[i], v[i]);
+  };
+  if (m0 <= d0 && m1 >= d1 && split.all) {
+    if (split.all.n) run(await load<ArrayBuffer>(`${base}_all.bin`, "bin"), split.all.n, () => true);
+    return;
+  }
+  const whole = new Uint8Array(256);
+  const part: number[] = [];
+  for (let y = Math.floor(Math.max(m0, d0) / 12); y <= Math.floor(Math.min(m1, d1) / 12); y++) {
+    const a = Math.max(y * 12, d0), b = Math.min(y * 12 + 11, d1);
+    if (m0 <= a && m1 >= b) whole[y] = 1;
+    else part.push(y);
+  }
+  const jobs: Promise<void>[] = [];
+  if (whole.some((f) => f) && split.y?.n) {
+    const n = split.y.n;
+    jobs.push(load<ArrayBuffer>(`${base}.bin`, "bin").then((buf) => run(buf, n, (t) => whole[t] === 1)));
+  }
+  for (const y of part) {
+    const info = split.m?.[String(2000 + y)];
+    if (!info?.n) continue;
+    const dir = base.endsWith("/hy") ? base.replace(/\/hy$/, "/hm") : base.replace(/\/t1y$/, "/t1m");
+    jobs.push(load<ArrayBuffer>(`${dir}/${2000 + y}.bin`, "bin").then((buf) => run(buf, info.n, (t) => t >= m0 && t <= m1)));
+  }
+  await Promise.all(jobs);
+}
+
 export async function fetchCells(from: string | null, to: string | null, metric: Metric, view: View | null): Promise<CellsResponse> {
   const idx = await index();
+  const d0 = monthIndex(idx.data_range.start), d1 = monthIndex(idx.data_range.end);
   const m0 = monthIndex(from ?? idx.data_range.start), m1 = monthIndex(to ?? idx.data_range.end);
-  const acc = new Map<number, number>();
   const blocks = view && view.zoom >= DETAIL_ZOOM ? blocksInView(idx, view) : [];
-  let step: number;
+  const split = Boolean(idx.map_tiles_y);
+  let out: CellsResponse;
   if (blocks.length && blocks.length <= MAX_VIEW_BLOCKS) {
-    step = 1 / idx.grid.cell_per_deg;
-    for (const r of blocks) {
-      const h = await cellsH(r);
-      const v = metric === "count" ? h.hc : h.hd;
-      for (let i = 0; i < h.n; i++) {
-        if (h.m[i] < m0 || h.m[i] > m1 || v[i] <= 0) continue;
-        const key = h.ix[i] * 4000 + h.iy[i];
-        acc.set(key, (acc.get(key) ?? 0) + v[i]);
+    // 0.1-degree cells; global cell indices ix = floor((lon + 180) * 10), iy = floor((lat + 90) * 10)
+    const k = idx.grid.cell_per_deg;
+    const ix0 = Math.round((Math.min(...blocks.map((r) => r.bbox[0])) + 180) * k);
+    const iy0 = Math.round((Math.min(...blocks.map((r) => r.bbox[1])) + 90) * k);
+    const nx = Math.round((Math.max(...blocks.map((r) => r.bbox[2])) + 180) * k) - ix0;
+    const ny = Math.round((Math.max(...blocks.map((r) => r.bbox[3])) + 90) * k) - iy0;
+    const grid = new Float32Array(nx * ny);
+    const add: AddFn = (x, y, v) => {
+      const gx = x - ix0, gy = y - iy0;
+      if (gx >= 0 && gx < nx && gy >= 0 && gy < ny) grid[gy * nx + gx] += v;
+    };
+    await Promise.all(blocks.map(async (r) => {
+      if (split && r.files.hy) {
+        await addSplit(`r/${r.id}/hy`, { all: r.files.hall, y: r.files.hy, m: r.files.hm }, m0, m1, d0, d1, metric, add);
+      } else {
+        const h = await cellsH(r);
+        const v = metric === "count" ? h.hc : h.hd;
+        for (let i = 0; i < h.n; i++) if (h.m[i] >= m0 && h.m[i] <= m1 && v[i] > 0) add(h.ix[i], h.iy[i], v[i]);
       }
-    }
+    }));
+    out = { cell_deg: 1 / k, start: "", end: "", west: ix0 / k - 180, south: iy0 / k - 90, nx, ny, grid, max: 0 };
   } else {
-    step = 1;
-    const buf = await load<ArrayBuffer>("map/tiles1.bin", "bin");
-    const n = idx.map_tiles.n;
-    const t = columns(buf, n, [["m", "u16"], ["tx", "u16"], ["ty", "u16"], ["hc", "f32"], ["hd", "f32"]]);
-    const v = metric === "count" ? t.hc : t.hd;
-    for (let i = 0; i < n; i++) {
-      if (t.m[i] < m0 || t.m[i] > m1 || v[i] <= 0) continue;
-      const key = t.tx[i] * 4000 + t.ty[i];
-      acc.set(key, (acc.get(key) ?? 0) + v[i]);
+    const nx = 360, ny = 180, grid = new Float32Array(nx * ny);
+    const add: AddFn = (x, y, v) => { if (x < nx && y < ny) grid[y * nx + x] += v; };
+    if (split) {
+      await addSplit("map/t1y", { all: idx.map_tiles_all, y: idx.map_tiles_y, m: idx.map_tiles_m }, m0, m1, d0, d1, metric, add);
+    } else {
+      const buf = await load<ArrayBuffer>("map/tiles1.bin", "bin");
+      const n = idx.map_tiles.n;
+      const t = columns(buf, n, [["m", "u16"], ["tx", "u16"], ["ty", "u16"], ["hc", "f32"], ["hd", "f32"]]);
+      const v = metric === "count" ? t.hc : t.hd;
+      for (let i = 0; i < n; i++) if (t.m[i] >= m0 && t.m[i] <= m1 && v[i] > 0) add(t.tx[i], t.ty[i], v[i]);
     }
+    out = { cell_deg: 1, start: "", end: "", west: -180, south: -90, nx, ny, grid, max: 0 };
   }
-  const west: number[] = [], south: number[] = [], value: number[] = [];
-  acc.forEach((v, key) => {
-    west.push(Math.floor(key / 4000) * step - 180);
-    south.push((key % 4000) * step - 90);
-    value.push(v);
-  });
-  return { cell_deg: step, start: monthText(m0), end: monthText(m1), west, south, value };
+  let max = 0;
+  for (let i = 0; i < out.grid.length; i++) if (out.grid[i] > max) max = out.grid[i];
+  return { ...out, start: monthText(m0), end: monthText(m1), max };
 }
 
 // ------------------------------------------------------------------ hotspot points

@@ -9,6 +9,9 @@ out/
   r/<region>/weights.json    harmonization weight per 1 deg tile, month, predictor (hotspot export)
   r/<region>/hot/<YYYY-MM>.bin  every cleaned hotspot of that month                 (map points, hotspot export)
   map/tiles1.bin             harmonized value per 1 deg tile and month, whole world   (map layer when zoomed out)
+  map/t1y.bin, map/t1m/<YYYY>.bin, r/<region>/hy.bin, r/<region>/hm/<YYYY>.bin
+                             the same map values per year (y) and per month split by year (m), so the
+                             map layer downloads only the years it shows (written by export_map)
   recent/<YYYY-MM-DD>.bin    every hotspot of each of the last RECENT_DAYS days, whole world (map points)
 
 Binary files are little-endian column blocks, one after another, each column for all N rows.
@@ -17,6 +20,9 @@ N per file is in index.json. Layouts (column: type):
   cells_raw.bin  m:u16 ix:u16 iy:u16 s:u8 n:u32 cd:u16           (columns padded to 4-byte offsets)
   hot/<ym>.bin   lat:i32 lon:i32 frp:f32 day:u16 time:u16 sat:u8 conf:u8 type:i8 dn:u8 proc:u8
   map/tiles1.bin m:u16 tx:u16 ty:u16 hc:f32 hd:f32               (tx = floor(lon + 180), ty = floor(lat + 90))
+  t1m/<Y>.bin, hm/<Y>.bin   same layout as tiles1.bin / cells_h.bin, rows of year Y only
+  t1y.bin, hy.bin           y:u16 x:u16 y:u16 hc:f32 hd:f32  (y = year - 2000; sums over the year's months)
+  t1y_all.bin, hy_all.bin   same layout, y = 65535, sums over every month in the data
   recent/<d>.bin lat:i32 lon:i32 frp:f32 time:u16 sat:u8 conf:u8
 m = months since 2000-01, lat/lon in 1e-5 degrees, day = day of year - 1.
 Codes: series  0 modis 1 terra 2 aqua 3 viirs_snpp 4 viirs_n20 5 viirs_n21
@@ -237,3 +243,61 @@ def run(cfg: Config, out: str, keep_hotspots: bool = False) -> None:
     }
     (out_dir / "index.json").write_text(json.dumps(index, separators=(",", ":")), "utf-8")
     print(f"[export] wrote {out_dir} ({total_bytes / 1e6:.1f} MB of binary data)")
+    export_map(cfg, out)
+
+
+def _write_split(con, df: pd.DataFrame, xcol: str, ycol: str, yearly_path: Path, monthly_dir: Path) -> tuple[dict, dict, dict]:
+    """Write sums over all months (y = 65535), per-year sums (one file) and the monthly rows
+    split into one file per year."""
+    shutil.rmtree(monthly_dir, ignore_errors=True)
+    monthly_dir.mkdir(parents=True)
+    df = df.assign(year=pd.to_datetime(df["month"]).dt.year)
+    monthly = {}
+    for year, g in df.groupby("year", sort=True):
+        g = g.sort_values(["month", ycol, xcol])
+        monthly[str(year)] = {"n": len(g), "bytes": _write_blocks(monthly_dir / f"{year}.bin", [
+            _month_index(g["month"]), g[xcol].to_numpy(np.uint16), g[ycol].to_numpy(np.uint16),
+            g["hc"].fillna(0).to_numpy(np.float32), g["hd"].fillna(0).to_numpy(np.float32)])}
+    y = df.groupby(["year", xcol, ycol], as_index=False)[["hc", "hd"]].sum().sort_values(["year", ycol, xcol])
+    yearly = {"n": len(y), "bytes": _write_blocks(yearly_path, [
+        (y["year"] - 2000).to_numpy(np.uint16), y[xcol].to_numpy(np.uint16), y[ycol].to_numpy(np.uint16),
+        y["hc"].to_numpy(np.float32), y["hd"].to_numpy(np.float32)])}
+    a = df.groupby([xcol, ycol], as_index=False)[["hc", "hd"]].sum().sort_values([ycol, xcol])
+    alltime = {"n": len(a), "bytes": _write_blocks(yearly_path.with_name(yearly_path.stem + "_all.bin"), [
+        np.full(len(a), 65535, np.uint16), a[xcol].to_numpy(np.uint16), a[ycol].to_numpy(np.uint16),
+        a["hc"].to_numpy(np.float32), a["hd"].to_numpy(np.float32)])}
+    return alltime, yearly, monthly
+
+
+def export_map(cfg: Config, out: str) -> None:
+    """Map-layer files split by year (see module docstring). Reads the harmonized cells and adds
+    the file list to an existing index.json, so it can run on its own after export-static."""
+    hdir = cfg.processed / "harmonized"
+    out_dir = Path(out)
+    index = json.loads((out_dir / "index.json").read_text("utf-8"))
+    meta = json.loads((hdir / "meta.json").read_text("utf-8"))
+    k = meta["grid"]["cell_per_deg"]
+    con = duck_connect()
+    total = 0
+    t = con.execute(
+        f"SELECT month, ix // {k} AS tx, iy // {k} AS ty, sum(h_count) AS hc, sum(h_celldays) AS hd "
+        f"FROM read_parquet('{(hdir / 'cells_monthly').as_posix()}/*/*/*.parquet', hive_partitioning=true) "
+        "GROUP BY ALL HAVING sum(h_count) > 0 OR sum(h_celldays) > 0").df()
+    index["map_tiles_all"], index["map_tiles_y"], index["map_tiles_m"] = _write_split(
+        con, t, "tx", "ty", out_dir / "map" / "t1y.bin", out_dir / "map" / "t1m")
+    total += index["map_tiles_all"]["bytes"] + index["map_tiles_y"]["bytes"] + sum(v["bytes"] for v in index["map_tiles_m"].values())
+    for entry in index["regions"]:
+        rid = entry["id"]
+        cdir = hdir / "cells_monthly" / f"region={rid}"
+        if not any(cdir.glob("*/*.parquet")):
+            entry["files"]["hall"], entry["files"]["hy"], entry["files"]["hm"] = {"n": 0, "bytes": 0}, {"n": 0, "bytes": 0}, {}
+            continue
+        h = con.execute(
+            f"SELECT month, ix, iy, h_count AS hc, h_celldays AS hd FROM read_parquet('{cdir.as_posix()}/*/*.parquet') "
+            "WHERE h_count > 0 OR h_celldays > 0").df()
+        rdir = out_dir / "r" / rid
+        entry["files"]["hall"], entry["files"]["hy"], entry["files"]["hm"] = _write_split(con, h, "ix", "iy", rdir / "hy.bin", rdir / "hm")
+        total += entry["files"]["hall"]["bytes"] + entry["files"]["hy"]["bytes"] + sum(v["bytes"] for v in entry["files"]["hm"].values())
+    con.close()
+    (out_dir / "index.json").write_text(json.dumps(index, separators=(",", ":")), "utf-8")
+    print(f"[export-map] wrote year-split map files ({total / 1e6:.1f} MB)")

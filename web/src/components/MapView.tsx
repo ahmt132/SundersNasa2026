@@ -2,7 +2,7 @@
 // grid layer, the selected area, and the drawing tools (rectangle, polygon, click-to-place point).
 import {
   GeolocateControl, Map as MlMap, Marker, NavigationControl, Popup, ScaleControl, setWorkerUrl,
-  type GeoJSONSource, type LngLat, type MapMouseEvent, type MapTouchEvent, type StyleSpecification,
+  type GeoJSONSource, type ImageSource, type LngLat, type MapMouseEvent, type MapTouchEvent, type StyleSpecification,
 } from "maplibre-gl";
 // MapLibre 6 ships its worker as a separate file and finds it next to its own module URL.
 // Bundlers move that module, so hand it the real URL of the worker file.
@@ -57,6 +57,67 @@ const polygon = (ring: Ring, props: object = {}) => ({
   type: "Feature", properties: props, geometry: { type: "Polygon", coordinates: [[...ring, ring[0]]] },
 });
 const setData = (map: MlMap, id: string, data: FC) => (map.getSource(id) as GeoJSONSource | undefined)?.setData(data as never);
+
+// ---- harmonized grid layer as one image
+// Thousands of GeoJSON squares are slow for MapLibre to tile; one image is drawn at once. The image
+// is built row by row in Web Mercator, so each grid row lands on its true latitude.
+const MERC_LAT = 85.05112878;
+const mercY = (lat: number) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+const latOf = (y: number) => (360 / Math.PI) * Math.atan(Math.exp(y)) - 90;
+type ImageCoords = [[number, number], [number, number], [number, number], [number, number]];
+const BLANK = (() => {
+  const c = document.createElement("canvas");
+  c.width = c.height = 1;
+  return c.toDataURL("image/png");
+})();
+const BLANK_COORDS: ImageCoords = [[-1, 1], [1, 1], [1, -1], [-1, -1]];
+let rampCache: Uint8ClampedArray | null = null;
+function ramp(): Uint8ClampedArray {
+  if (rampCache) return rampCache;
+  const c = document.createElement("canvas").getContext("2d")!;
+  const out = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    c.fillStyle = inferno(i / 255);
+    c.fillRect(0, 0, 1, 1);
+    const d = c.getImageData(0, 0, 1, 1).data;
+    out.set([d[0], d[1], d[2]], i * 3);
+  }
+  return (rampCache = out);
+}
+function gridImage(c: CellsResponse): { url: string; coordinates: ImageCoords } | null {
+  if (c.max <= 0) return null;
+  const s = Math.max(c.south, -MERC_LAT), n = Math.min(c.south + c.ny * c.cell_deg, MERC_LAT);
+  if (n <= s) return null;
+  const ys = mercY(s), yn = mercY(n);
+  const h = Math.min(4096, Math.max(64, c.ny * 4));
+  const canvas = document.createElement("canvas");
+  canvas.width = c.nx;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  const img = ctx.createImageData(c.nx, h);
+  const lut = ramp(), denom = Math.log1p(c.max) || 1;
+  const rows = new Map<number, Uint8ClampedArray>();
+  for (let r = 0; r < h; r++) {
+    const lat = latOf(yn - ((r + 0.5) / h) * (yn - ys));
+    const gy = Math.floor((lat - c.south) / c.cell_deg);
+    if (gy < 0 || gy >= c.ny) continue;
+    let row = rows.get(gy);
+    if (!row) {
+      row = new Uint8ClampedArray(c.nx * 4);
+      for (let x = 0; x < c.nx; x++) {
+        const v = c.grid[gy * c.nx + x];
+        if (v <= 0) continue;
+        const k = Math.round((Math.log1p(v) / denom) * 255) * 3;
+        row[x * 4] = lut[k]; row[x * 4 + 1] = lut[k + 1]; row[x * 4 + 2] = lut[k + 2]; row[x * 4 + 3] = 255;
+      }
+      rows.set(gy, row);
+    }
+    img.data.set(row, r * c.nx * 4);
+  }
+  ctx.putImageData(img, 0, 0);
+  const w = c.west, e = c.west + c.nx * c.cell_deg;
+  return { url: canvas.toDataURL("image/png"), coordinates: [[w, n], [e, n], [e, s], [w, s]] };
+}
 
 /** Area of a lon/lat ring on the sphere, km². */
 export function ringAreaKm2(ring: Ring): number {
@@ -151,8 +212,9 @@ export function MapView(p: Props) {
       map.addSource("imagery", { type: "raster", tiles: [gibsUrl("VIIRS_NOAA20_CorrectedReflectance_TrueColor", "2025-01-01")], tileSize: 256, maxzoom: 9, attribution: "Imagery: NASA EOSDIS GIBS" });
       map.addLayer({ id: "imagery", type: "raster", source: "imagery", layout: { visibility: "none" } });
       map.addSource("labels", { type: "raster", tiles: ["https://tiles.maps.eox.at/wmts/1.0.0/overlay_bright_3857/default/g/{z}/{y}/{x}.png"], tileSize: 256, attribution: "Overlay: Data © OpenStreetMap contributors and others, Rendering © EOX" });
-      for (const id of ["cells", "selection", "draft", "points"]) map.addSource(id, { type: "geojson", data: fc([]) as never });
-      map.addLayer({ id: "cells", type: "fill", source: "cells", paint: { "fill-color": ["get", "color"], "fill-opacity": 0.62, "fill-antialias": false } });
+      for (const id of ["selection", "draft", "points"]) map.addSource(id, { type: "geojson", data: fc([]) as never });
+      map.addSource("cells", { type: "image", url: BLANK, coordinates: BLANK_COORDS });
+      map.addLayer({ id: "cells", type: "raster", source: "cells", paint: { "raster-opacity": 0.62, "raster-resampling": "nearest", "raster-fade-duration": 0 } });
       map.addLayer({ id: "labels", type: "raster", source: "labels" });
       map.addLayer({ id: "selection-fill", type: "fill", source: "selection", paint: { "fill-color": "#ffffff", "fill-opacity": 0.16 } });
       map.addLayer({ id: "selection-line", type: "line", source: "selection", paint: { "line-color": "#ffffff", "line-width": 1.6, "line-dasharray": [3, 2] } });
@@ -190,7 +252,9 @@ export function MapView(p: Props) {
         if (modeRef.current) return;
         const f = e.features?.[0];
         if (!f) return;
-        const q = f.properties as Record<string, string | number>;
+        // Features carry only the sensor and an index; details come from the points array.
+        const q = props.current.points[Number((f.properties as { i: number }).i)];
+        if (!q) return;
         const el = document.createElement("div");
         const rows: [string, string][] = [
           ["Satellite", String(q.sat)], ["Date (UTC)", `${q.date} ${String(q.time).slice(0, 2)}:${String(q.time).slice(2)}`],
@@ -332,24 +396,23 @@ export function MapView(p: Props) {
   }, [ready, p.layers]);
 
   // ---- data layers
-  const cellMax = p.cells?.value.length ? p.cells.value.reduce((a, b) => Math.max(a, b), 0) : 0;
+  const cellMax = p.cells?.max ?? 0;
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return;
-    if (!p.cells) return void setData(map, "cells", fc([]));
-    const d = p.cells.cell_deg, denom = Math.log1p(cellMax) || 1, c = p.cells;
-    setData(map, "cells", fc(c.value.map((v, i) => {
-      const w = c.west[i], s = c.south[i];
-      return polygon([[w, s], [w + d, s], [w + d, s + d], [w, s + d]], { color: inferno(Math.log1p(v) / denom) });
-    })));
-  }, [ready, p.cells, cellMax]);
+    const src = map.getSource("cells") as ImageSource | undefined;
+    const img = p.cells ? gridImage(p.cells) : null;
+    src?.updateImage(img ?? { url: BLANK, coordinates: BLANK_COORDS });
+  }, [ready, p.cells]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return;
-    setData(map, "points", fc(p.points.map((q) => ({
+    // Only what the layers need (sensor for the style, index for the click popup): hundreds of
+    // thousands of points are copied to MapLibre's worker, so every extra property costs time.
+    setData(map, "points", fc(p.points.map((q, i) => ({
       type: "Feature",
-      properties: { s: q.sat === "Terra" || q.sat === "Aqua" ? "MODIS" : "VIIRS", sat: q.sat, date: q.date, time: q.time, frp: q.frp, conf: q.conf, lat: q.lat, lon: q.lon },
+      properties: { s: q.sat === "Terra" || q.sat === "Aqua" ? "MODIS" : "VIIRS", i },
       geometry: { type: "Point", coordinates: [q.lon, q.lat] },
     }))));
   }, [ready, p.points]);
