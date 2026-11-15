@@ -180,36 +180,50 @@ def test_static_export_matches_series(project, tmp_path):
         assert np.isclose(hc.sum(), ref["h_count"].sum(), rtol=1e-4)
 
 
-def test_import_zips_routes_rows_to_regions(tmp_path):
-    """MOCK data: a Drive-style zip holding FIRMS request zips is unpacked and split by region bbox."""
+def test_ingest_global_reads_nested_zips_into_world_blocks(tmp_path):
+    """MOCK data: a Drive-style zip holding FIRMS request zips is unpacked (Landsat skipped),
+    cleaned and written per 30-degree world block."""
     import io
+    import re
     import zipfile
 
-    from pipeline import import_zips
+    from pipeline import ingest_global
 
     root = tmp_path / "proj"
     root.mkdir()
     write_mock_project(root)
-    cfg = load_config(root / "config" / "pipeline.toml")
+    toml = root / "config" / "pipeline.toml"
+    # worldwide set-up: drop the named [regions.*] tables (each runs until the next table header)
+    keep, skipping = [], False
+    for line in toml.read_text().splitlines():
+        if re.match(r"^\[[^\]]+\]\s*$", line):
+            skipping = line.startswith("[regions.")
+        if not skipping:
+            keep.append(line)
+    text = "\n".join(keep) + "\n"
+    text = text.replace('reports = "reports"', 'reports = "reports"\nzips = ["drive"]') + "\n[world]\nblock_deg = 30\n"
+    toml.write_text(text)
+    cfg = load_config(toml)
     header = "latitude,longitude,bright_ti4,scan,track,acq_date,acq_time,satellite,instrument,confidence,version,bright_ti5,frp,daynight,type\n"
-    rows = ["1.5,11.5,330,0.4,0.4,2024-07-01,0130,N20,VIIRS,n,2,290,3.1,N,0",   # mock_a
-            "1.5,21.5,330,0.4,0.4,2024-07-01,0130,N20,VIIRS,h,2,290,3.1,N,0",   # mock_b
-            "45.0,90.0,330,0.4,0.4,2024-07-01,0130,N20,VIIRS,n,2,290,3.1,N,0"]  # outside both
+    rows = ["1.5,11.5,330,0.4,0.4,2024-07-01,0130,N20,VIIRS,n,2,290,3.1,N,0",
+            "1.5,21.5,330,0.4,0.4,2024-07-01,0130,N20,VIIRS,h,2,290,3.1,N,0",
+            "45.0,90.0,330,0.4,0.4,2024-07-01,0130,N20,VIIRS,n,2,290,3.1,N,0",
+            "45.0,90.5,330,0.4,0.4,2024-07-01,0130,N20,VIIRS,l,2,290,3.1,N,0"]  # low confidence: dropped
     inner = io.BytesIO()
     with zipfile.ZipFile(inner, "w") as z:
         z.writestr("fire_archive_J1V-C2_1.csv", header + "\n".join(rows) + "\n")
     landsat = io.BytesIO()
     with zipfile.ZipFile(landsat, "w") as z:
         z.writestr("fire_archive_LS_1.csv", "latitude,longitude\n1.5,11.5\n")
-    drive = tmp_path / "drive"
+    drive = root / "drive"
     drive.mkdir()
     with zipfile.ZipFile(drive / "Nasa SpaceApps 2026.zip", "w") as z:
         z.writestr("DL_FIRE_J1V-C2_1.zip", inner.getvalue())
         z.writestr("DL_FIRE_LS_1.zip", landsat.getvalue())
-    stats = import_zips.run(cfg, str(drive))
-    assert stats == {"mock_a": 1, "mock_b": 1}
-    out = list((cfg.raw / "mock_a").glob("zip_*.csv"))
-    assert len(out) == 1 and out[0].read_text().splitlines()[1].startswith("1.5,11.5")
+    report = ingest_global.run(cfg)
+    assert report["rows_read"] == 4 and report["dropped_low_confidence"] == 1 and report["rows_kept"] == 3
+    assert report["blocks"] == {"w000e_00n": 2, "w090e_30n": 1}
+    assert not any("LS" in f for f in report["files"])
 
 
 def test_missing_year_is_not_read_as_zero_fires():

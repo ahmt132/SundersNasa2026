@@ -24,10 +24,12 @@ fire record has to cross that seam.
    whichever of three methods (quantile mapping, Theil–Sen, ratio) predicts best on
    held-out years. Every result carries an uncertainty band.
 2. **A website, the "burning calendar"**: a world map of recent hotspots plus a
-   month × year calendar of harmonized fire activity for any area you choose — a preset, a
-   rectangle, a polygon or a point with a radius. It has an anomaly mode (each month
-   against its usual level), key figures, charts, CSV and Excel downloads and shareable links. All
-   calculations run in the browser; there is no server to maintain.
+   month × year calendar of harmonized fire activity for any area you choose — one of 25 quick
+   areas (continents and well-known fire regions), a rectangle, a polygon or a point with a
+   radius. Each square shows its value; a "compared with usual" mode shows how each month differs
+   from the same month in other years. Charts (seasonal profile, year by year, MODIS vs VIIRS),
+   plain-language reading guides, CSV and Excel downloads and shareable links. All calculations
+   run in the browser; there is no server to maintain.
 
 ## Results (held-out years, whole world, Nov 2022 – Nov 2026)
 
@@ -75,12 +77,12 @@ pipeline/                 Python pipeline
   run.py                  command line (python -m pipeline.run ...)
 web/                      website (React, TypeScript, Vite, MapLibre)
   src/api.ts              all calculations, in the browser
-  src/App.tsx             layout and panel
-  src/components/         map, calendar, charts, key figures
+  src/App.tsx             layout: controls (left), map, results under the map
+  src/areas.ts            the quick areas in the area menu
+  src/components/         map, calendar, charts, reading guides, loading screen
 scripts/                  upload data to Cloudflare R2
 docs/                     data download, deployment
 tests/                    pytest (uses clearly labelled synthetic data only)
-api/                      optional FastAPI service (not used by the site)
 ```
 
 ## Run it yourself (Windows, PowerShell)

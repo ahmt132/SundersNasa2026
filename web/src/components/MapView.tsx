@@ -1,5 +1,5 @@
 // Full-screen map: satellite basemaps, daily true-colour imagery, hotspot points, the harmonized
-// grid layer, region outlines, and the drawing tools (rectangle, polygon, click-to-place point).
+// grid layer, the selected area, and the drawing tools (rectangle, polygon, click-to-place point).
 import {
   GeolocateControl, Map as MlMap, Marker, NavigationControl, Popup, ScaleControl, setWorkerUrl,
   type GeoJSONSource, type LngLat, type MapMouseEvent, type MapTouchEvent, type StyleSpecification,
@@ -16,7 +16,7 @@ setWorkerUrl(new URL(workerUrl, document.baseURI).href);
 
 export type DrawMode = null | "rect" | "poly" | "point";
 export type Basemap = "sentinel" | "bluemarble" | "streets" | "blackmarble";
-export interface Layers { viirs: boolean; modis: boolean; cells: boolean; outlines: boolean; labels: boolean }
+export interface Layers { viirs: boolean; modis: boolean; cells: boolean; labels: boolean }
 
 // Base layers. Each entry: tile URL, attribution, max native zoom.
 export const BASEMAPS: Record<Basemap, { label: string; url: string; attribution: string; maxzoom: number }> = {
@@ -45,13 +45,6 @@ export const BASEMAPS: Record<Basemap, { label: string; url: string; attribution
 };
 
 // Daily corrected-reflectance (true colour) imagery from NASA GIBS. Layer names checked 2026-11-14.
-export const IMAGERY: Record<string, { label: string; sat: string }> = {
-  VIIRS_NOAA20_CorrectedReflectance_TrueColor: { label: "VIIRS NOAA-20 corrected reflectance (true colour)", sat: "NOAA-20" },
-  VIIRS_NOAA21_CorrectedReflectance_TrueColor: { label: "VIIRS NOAA-21 corrected reflectance (true colour)", sat: "NOAA-21" },
-  VIIRS_SNPP_CorrectedReflectance_TrueColor: { label: "VIIRS S-NPP corrected reflectance (true colour)", sat: "S-NPP" },
-  MODIS_Aqua_CorrectedReflectance_TrueColor: { label: "MODIS Aqua corrected reflectance (true colour)", sat: "Aqua" },
-  MODIS_Terra_CorrectedReflectance_TrueColor: { label: "MODIS Terra corrected reflectance (true colour)", sat: "Terra" },
-};
 const gibsUrl = (layer: string, date: string) =>
   `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layer}/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
 
@@ -100,7 +93,6 @@ interface Props {
   imagery: string | null;
   imageryDate: string | null;
   drawMode: DrawMode;
-  rightInset: number; // px covered by the side panel, so fits keep the selection visible
   onDrawEnd: () => void;
   onDrawCount: (n: number) => void;
   onSelect: (sel: Selection) => void;
@@ -157,10 +149,9 @@ export function MapView(p: Props) {
       map.addSource("imagery", { type: "raster", tiles: [gibsUrl("VIIRS_NOAA20_CorrectedReflectance_TrueColor", "2025-01-01")], tileSize: 256, maxzoom: 9, attribution: "Imagery: NASA EOSDIS GIBS" });
       map.addLayer({ id: "imagery", type: "raster", source: "imagery", layout: { visibility: "none" } });
       map.addSource("labels", { type: "raster", tiles: ["https://tiles.maps.eox.at/wmts/1.0.0/overlay_bright_3857/default/g/{z}/{y}/{x}.png"], tileSize: 256, attribution: "Overlay: Data © OpenStreetMap contributors and others, Rendering © EOX" });
-      for (const id of ["cells", "regions", "selection", "draft", "points"]) map.addSource(id, { type: "geojson", data: fc([]) as never });
+      for (const id of ["cells", "selection", "draft", "points"]) map.addSource(id, { type: "geojson", data: fc([]) as never });
       map.addLayer({ id: "cells", type: "fill", source: "cells", paint: { "fill-color": ["get", "color"], "fill-opacity": 0.62, "fill-antialias": false } });
       map.addLayer({ id: "labels", type: "raster", source: "labels" });
-      map.addLayer({ id: "regions", type: "line", source: "regions", paint: { "line-color": "#ffffff", "line-opacity": 0.55, "line-width": 1, "line-dasharray": [4, 3] } });
       map.addLayer({ id: "selection-fill", type: "fill", source: "selection", paint: { "fill-color": "#ffffff", "fill-opacity": 0.16 } });
       map.addLayer({ id: "selection-line", type: "line", source: "selection", paint: { "line-color": "#ffffff", "line-width": 1.6, "line-dasharray": [3, 2] } });
       map.addLayer({ id: "draft-line", type: "line", source: "draft", paint: { "line-color": "#ffffff", "line-width": 1.5, "line-dasharray": [2, 2] } });
@@ -329,7 +320,6 @@ export function MapView(p: Props) {
     if (!ready || !map) return;
     const vis = (on: boolean) => (on ? "visible" : "none");
     map.setLayoutProperty("labels", "visibility", vis(p.layers.labels));
-    map.setLayoutProperty("regions", "visibility", vis(p.layers.outlines));
     map.setLayoutProperty("cells", "visibility", vis(p.layers.cells));
     map.setLayoutProperty("points-viirs", "visibility", vis(p.layers.viirs));
     map.setLayoutProperty("points-modis", "visibility", vis(p.layers.modis));
@@ -378,12 +368,6 @@ export function MapView(p: Props) {
     return () => { cancelled = true; cancelAnimationFrame(raf); map.off("sourcedata", onData); };
   }, [ready, p.awaitDrawn, p.points]);
 
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!ready || !map) return;
-    setData(map, "regions", fc(p.regions.map((r) => polygon(selectionRing({ type: "region", id: r.id }, p.regions)!))));
-  }, [ready, p.regions]);
-
   // ---- selection outline, area label, fit
   useEffect(() => {
     const map = mapRef.current;
@@ -419,7 +403,7 @@ export function MapView(p: Props) {
       if (!ring) return;
       const lons = ring.map((c) => c[0]), lats = ring.map((c) => c[1]);
       map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
-        { padding: { top: 70, bottom: 60, left: 70, right: props.current.rightInset + 40 }, maxZoom: 11, duration: 500 });
+        { padding: { top: 70, bottom: 60, left: 70, right: 70 }, maxZoom: 11, duration: 500 });
     };
     fitRef.current();
   }, [ready, p.sel, p.regions]);

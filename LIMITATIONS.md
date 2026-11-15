@@ -11,9 +11,9 @@ conclusions from the site.
 2. **Fires hidden from the satellites are missing.** Cloud, thick smoke, dense canopy and
    fires that burn between overpasses are not detected by either sensor. Harmonization
    cannot recover them.
-3. **Only four years are loaded right now** (13 Nov 2022 – 13 Nov 2026). "Usual", "median"
-   and "record" on the site compare against at most three other years of the same month.
-   A "record year" here is the highest of three complete years, not a long-term record.
+3. **Only four years are loaded right now** (13 Nov 2022 – 13 Nov 2026). "Usual" and
+   "median" on the site (anomaly mode, seasonal profile) compare against at most three other
+   years of the same month, so they are not long-term averages.
 4. **The newest months use near-real-time (NRT) data** (MODIS from Sep 2026, VIIRS from
    Aug 2026). NRT has less quality control than standard processing and will be replaced
    when FIRMS publishes the final archive.
@@ -54,5 +54,3 @@ conclusions from the site.
 15. **Map display is sampled when very dense.** If more than 200,000 hotspots are in view,
     an even sample is drawn and the panel says so. The counts in the panel always use all
     data.
-16. **The optional FastAPI service (`api/`) has not been updated** for the worldwide 30°
-    blocks. The website does not use it.

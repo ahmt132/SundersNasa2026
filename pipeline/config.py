@@ -23,7 +23,6 @@ class Region:
     id: str
     name: str
     bbox: tuple[float, float, float, float]  # west, south, east, north
-    firms_countries: tuple[str, ...] = ()  # names used by FIRMS country-year files
 
 
 @dataclass(frozen=True)
@@ -111,7 +110,7 @@ def load_config(path: str | Path = "config/pipeline.toml") -> Config:
         w, s, e, n = (float(v) for v in r["bbox"])
         if not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
             raise ValueError(f"region {rid}: bbox must be west,south,east,north with west<east, south<north")
-        regions[rid] = Region(rid, r.get("name", rid), (w, s, e, n), tuple(r.get("firms_countries", ())))
+        regions[rid] = Region(rid, r.get("name", rid), (w, s, e, n))
 
     presets = {pid: Region(pid, v.get("name", pid), tuple(float(x) for x in v["bbox"]))
                for pid, v in raw.get("presets", {}).items()}

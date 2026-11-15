@@ -173,10 +173,11 @@ export function AnnualTotals({ months, unitShort, footer }: ChartProps) {
     return { rows, full, fit, mean, switchYear };
   }, [months]);
 
+  const showTrend = !!d.fit && d.full.length >= 5;
   const lg = layoutLegend([
     { color: T.accent, label: "Complete year", kind: "rect" },
-    { color: "#7a4a2c", label: "Incomplete year", kind: "rect" },
-    { color: T.ink, dash: "5 4", label: "Theil–Sen trend" },
+    ...(d.rows.some((r) => !r.complete) ? [{ color: "#7a4a2c", label: "Incomplete year (not all 12 months)", kind: "rect" as const }] : []),
+    ...(showTrend ? [{ color: T.ink, dash: "5 4", label: "Theil–Sen trend" }] : []),
   ], width);
   const mt = lg.mt;
   const x = scaleBand<number>().domain(d.rows.map((r) => r.year)).range([M.l, width - M.r]).paddingInner(0.25).paddingOuter(0.15);
@@ -190,9 +191,9 @@ export function AnnualTotals({ months, unitShort, footer }: ChartProps) {
     return `M${x0},${y(0)}V${y0 + rad}Q${x0},${y0} ${x0 + rad},${y0}H${x0 + bw - rad}Q${x0 + bw},${y0} ${x0 + bw},${y0 + rad}V${y(0)}Z`;
   };
 
-  const trendText = d.fit && d.full.length >= 5
+  const trendText = showTrend && d.fit
     ? `Trend ${d.fit.slope >= 0 ? "+" : "−"}${fmt(Math.abs(d.fit.slope))} per year (${d.mean ? `${((d.fit.slope / d.mean) * 100).toFixed(1)}% of the mean` : "mean is 0"}), Theil–Sen line over ${d.full.length} complete years; not a significance test.`
-    : "Too few complete years in this range for a trend line.";
+    : `A trend line needs at least 5 complete years; this range has ${d.full.length}.`;
 
   const tip: Tip | null = hover == null ? null : {
     x: xs[hover], y: y(d.rows[hover].total),
@@ -208,7 +209,7 @@ export function AnnualTotals({ months, unitShort, footer }: ChartProps) {
   };
 
   return (
-    <ChartFrame title="Annual totals" exportName="annual-totals" svgRef={svgRef} footer={footer}
+    <ChartFrame title="Year by year" exportName="annual-totals" svgRef={svgRef} footer={footer}
       subtitle={`Harmonized ${unitShort} per calendar year. ${trendText}`}>
       <div ref={bodyRef} className="chart-body">
         {width > 0 && (
@@ -232,7 +233,7 @@ export function AnnualTotals({ months, unitShort, footer }: ChartProps) {
               </g>
             ))}
             <line x1={M.l} x2={width - M.r} y1={y(0)} y2={y(0)} stroke={T.ink3} strokeWidth={1} />
-            {d.fit && d.full.length >= 5 && (
+            {showTrend && d.fit && (
               <line x1={cx(d.full[0].year)} x2={cx(d.full[d.full.length - 1].year)}
                 y1={y(Math.max(0, d.fit.intercept + d.fit.slope * d.full[0].year))}
                 y2={y(Math.max(0, d.fit.intercept + d.fit.slope * d.full[d.full.length - 1].year))}
@@ -317,8 +318,8 @@ export function SensorPanel({ months, unitShort, footer, agg, onAgg }: SensorPro
   };
 
   return (
-    <ChartFrame title="Sensor transparency" exportName="sensor-transparency" svgRef={svgRef} subtitle={subtitle}
-      footer={`${footer} The transfer was fitted on this overlap; out-of-sample scores are in reports/validation_metrics.csv.`}
+    <ChartFrame title="MODIS vs VIIRS" exportName="modis-vs-viirs" svgRef={svgRef} subtitle={subtitle}
+      footer={`${footer} The conversion was fitted on these months; tests on held-out years are in VALIDATION.md in the project repository.`}
       controls={<Segmented label="Aggregation" value={agg} onChange={onAgg}
         options={[{ value: "month", label: "Monthly" }, { value: "year", label: "Annual" }]} />}>
       <div ref={bodyRef} className="chart-body">

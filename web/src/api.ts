@@ -1,9 +1,10 @@
 // Data layer for the static website. Everything is computed in the browser from the files
 // written by `python -m pipeline.run export-static` (see pipeline/export_static.py), so the site
-// runs on static hosting (Cloudflare Pages for the page, Cloudflare R2 for the data). The numbers are the same ones the FastAPI
-// service returns: region selections use the exact precomputed region series; custom areas are
-// summed from 0.1-degree grid cells whose centre lies inside the shape.
+// runs on static hosting (Cloudflare Pages for the page, Cloudflare R2 for the data). Box-shaped
+// selections use the precomputed series of the world blocks they contain; other parts are summed
+// from 0.1-degree grid cells whose centre lies inside the shape.
 
+import { QUICK_AREAS } from "./areas";
 import { type Cell, xlsxBlob } from "./xlsx";
 
 export type Metric = "count" | "celldays";
@@ -48,28 +49,11 @@ export interface Meta {
   approximate: boolean; // custom area summed from grid cells
 }
 
-export interface Kpis {
-  n_months: number;
-  n_complete_months: number;
-  totals: { harmonized: number; modis_raw: number; viirs_snpp_raw: number; viirs_n20_raw: number; viirs_n21_raw: number };
-  latest_month?: {
-    month: string;
-    value: number;
-    historical_median: number | null;
-    ratio_to_median: number | null;
-    percentile_rank: number | null;
-    n_other_years: number;
-  };
-  peak_month?: { moy: number; value: number; basis: "median" | "mean" };
-  record_year?: { year: number; value: number; n_complete_years: number };
-}
-
 export interface RegionInfo {
   id: string;
   name: string;
   bbox: [number, number, number, number];
-  start: string;
-  end: string;
+  group: string;
 }
 
 export interface RegionsResponse {
@@ -125,7 +109,6 @@ interface Index {
   uncertainty: Record<string, (string | number | null)[]>;
   coverage: { region: string; series: string; first: string; last: string }[];
   regions: RegionIndex[]; // world blocks that hold data
-  presets: { id: string; name: string; bbox: [number, number, number, number] }[];
   map_tiles: { n: number };
   recent: Record<string, { n: number }>;
 }
@@ -349,14 +332,10 @@ export async function fetchRegions(): Promise<RegionsResponse> {
     // first observed day of any satellite (the month range starts on the 1st of that month)
     first_day: idx.coverage.length ? idx.coverage.map((c) => c.first).sort()[0] : null,
     last_day: idx.last_day,
-    // the area menu lists the named shortcuts; the world blocks stay internal
-    regions: idx.presets.map(({ id, name, bbox }) => ({ id, name, bbox, start: idx.data_range.start, end: idx.data_range.end })),
+    // the area menu lists the quick areas (src/areas.ts); the world blocks stay internal
+    regions: QUICK_AREAS,
     citation: idx.citation,
   };
-}
-
-export async function lastDay(): Promise<string | null> {
-  return (await index()).last_day;
 }
 
 const SERIES_OUT = ["modis", "terra", "aqua", "viirs_snpp", "viirs_n20", "viirs_n21"] as const;
@@ -462,7 +441,7 @@ export function fetchCalendar(q: Query): Promise<Computed> {
 
 async function compute(q: Query): Promise<Computed> {
   const idx = await index();
-  const shape = shapeOf(q.sel, idx.presets as RegionInfo[]);
+  const shape = shapeOf(q.sel, QUICK_AREAS);
   const hit = idx.regions.filter((r) => overlaps(shape.bbox, r.bbox));
   if (!hit.length)
     throw new ApiError(404, "outside_coverage", "No fire detections exist anywhere in this area in the supplied data.");
@@ -516,58 +495,6 @@ async function compute(q: Query): Promise<Computed> {
       pipeline_run_utc: idx.pipeline_run_utc, served_utc: idx.generated_utc, citation: idx.citation, approximate,
     },
   };
-}
-
-/** Key figures (port of api/store.py Store.summary). */
-export function summarize(months: MonthRow[]): Kpis {
-  const done = months.filter((m) => !m.partial && m.harmonized != null);
-  const sum = (f: (m: MonthRow) => number | null) => months.reduce((s, m) => s + (f(m) ?? 0), 0);
-  const out: Kpis = {
-    n_months: months.length, n_complete_months: done.length,
-    totals: {
-      harmonized: sum((m) => m.harmonized), modis_raw: sum((m) => m.modis_raw),
-      viirs_snpp_raw: sum((m) => m.viirs_snpp_raw), viirs_n20_raw: sum((m) => m.viirs_n20_raw), viirs_n21_raw: sum((m) => m.viirs_n21_raw),
-    },
-  };
-  if (!done.length) return out;
-  const med = (v: number[]) => {
-    const s = [...v].sort((a, b) => a - b);
-    return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
-  };
-  const ref = done[done.length - 1];
-  const others = done.filter((m) => m.moy === ref.moy && m.month !== ref.month).map((m) => m.harmonized!);
-  const median = others.length ? med(others) : null;
-  out.latest_month = {
-    month: ref.month, value: ref.harmonized!, historical_median: median,
-    ratio_to_median: median ? ref.harmonized! / median : null,
-    percentile_rank: others.length ? (100 * others.filter((v) => v <= ref.harmonized!).length) / others.length : null,
-    n_other_years: others.length,
-  };
-  const byMoy = (f: (v: number[]) => number) =>
-    Array.from({ length: 12 }, (_, i) => {
-      const v = done.filter((m) => m.moy === i + 1).map((m) => m.harmonized!);
-      return v.length ? f(v) : -Infinity;
-    });
-  let basis: "median" | "mean" = "median";
-  let vals = byMoy(med);
-  if (Math.max(...vals) === 0) {
-    basis = "mean";
-    vals = byMoy((v) => v.reduce((a, b) => a + b, 0) / v.length);
-  }
-  if (Math.max(...vals) > 0) out.peak_month = { moy: vals.indexOf(Math.max(...vals)) + 1, value: Math.max(...vals), basis };
-  const years = new Map<number, number[]>();
-  done.forEach((m) => years.set(m.year, [...(years.get(m.year) ?? []), m.harmonized!]));
-  const full = [...years.entries()].filter(([, v]) => v.length === 12).map(([y, v]) => [y, v.reduce((a, b) => a + b, 0)] as const);
-  if (full.length) {
-    const best = full.reduce((a, b) => (b[1] > a[1] ? b : a));
-    out.record_year = { year: best[0], value: best[1], n_complete_years: full.length };
-  }
-  return out;
-}
-
-export async function fetchSummary(q: Query): Promise<{ meta: Meta; kpis: Kpis }> {
-  const c = await fetchCalendar(q);
-  return { meta: c.meta, kpis: summarize(c.months) };
 }
 
 export interface View {
@@ -765,7 +692,7 @@ async function calendarTable(q: Query, label: string): Promise<ExportTable> {
 async function hotspotsTable(q: Query, label: string): Promise<ExportTable> {
   const idx = await index();
   const { meta } = await fetchCalendar(q);
-  const shape = shapeOf(q.sel, idx.presets as RegionInfo[]);
+  const shape = shapeOf(q.sel, QUICK_AREAS);
   const d0 = `${q.from ?? idx.data_range.start}-01`;
   const endM = q.to ?? idx.data_range.end;
   const d1 = new Date(Date.UTC(Number(endM.slice(0, 4)), Number(endM.slice(5, 7)), 0)).toISOString().slice(0, 10);
@@ -832,10 +759,6 @@ export async function hotspotsExport(q: Query, label: string, format: ExportForm
   const t = await hotspotsTable(q, label);
   return format === "csv" ? toCsv(t) : toXlsx(t, "Hotspots");
 }
-
-/** The CSV files are unchanged by the Excel option. */
-export const calendarCsv = (q: Query, label: string) => calendarExport(q, label, "csv");
-export const hotspotsCsv = (q: Query, label: string) => hotspotsExport(q, label, "csv");
 
 export function saveBlob(blob: Blob, name: string): void {
   const url = URL.createObjectURL(blob);

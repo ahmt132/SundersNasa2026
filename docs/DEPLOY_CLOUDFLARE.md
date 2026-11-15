@@ -69,4 +69,3 @@ The Node version for the build comes from `web/.node-version`.
   NASA GIBS. Sentinel-2 cloudless is CC BY-NC-SA 4.0: fine for a non-commercial Space Apps
   project with the attribution the map already shows; a commercial site would need a licence
   from EOX.
-- The **FastAPI service** (`api/`) is not needed by the website and is not deployed here.
