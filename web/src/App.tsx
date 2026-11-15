@@ -291,16 +291,10 @@ export default function App() {
         <button type="button" className="icon-btn" aria-label={panelOpen ? "Hide side panel" : "Show side panel"} aria-expanded={panelOpen}
           onClick={() => setPanelOpen((v) => !v)}><Icon d={ICONS.menu} size={22} /></button>
         <div className="brand">
-          <svg className="mark" viewBox="0 0 32 32" aria-hidden="true">
-            <rect x="1" y="1" width="30" height="30" rx="4" fill="none" stroke="currentColor" strokeWidth="2" />
-            {[0, 1, 2].map((r) => [0, 1, 2, 3].map((c) => (
-              <rect key={`${r}${c}`} x={6 + c * 5.5} y={8 + r * 6} width="4" height="4.4" rx="0.8"
-                fill="currentColor" opacity={[0.35, 0.55, 1, 0.7, 0.45, 0.9, 1, 0.6, 0.3, 0.5, 0.8, 0.4][r * 4 + c]} />
-            )))}
-          </svg>
+          <img className="mark" src="./brand/sunders-planet.png" alt="" width={38} height={38} />
           <div>
             <div className="brand-name">Burning Calendar</div>
-            <div className="brand-sub">Harmonized MODIS + VIIRS active-fire record</div>
+            <div className="brand-sub">Harmonized MODIS + VIIRS active-fire record · by team Sunders</div>
           </div>
         </div>
         <nav className="top-links" aria-label="Site">
@@ -520,6 +514,8 @@ export default function App() {
       )}
       {modal === "about" && (
         <Modal title="Data & credits" onClose={() => setModal(null)}>
+          <img className="team-banner" src="./brand/sunders-banner.png" alt="Team Sunders banner" width={648} height={406} />
+          <p>Made by team <strong>Sunders</strong> for the NASA Space Apps Challenge 2026.</p>
           <p>{regions?.citation}</p>
           <p>We acknowledge the use of data and imagery from LANCE FIRMS operated by NASA&apos;s Goddard Space Flight Center Earth Science Data and Information System (ESDIS) with funding provided by NASA Headquarters.</p>
           <p>Daily true-colour imagery and Blue Marble: NASA EOSDIS Global Imagery Browse Services (GIBS). Background imagery: EOxCloudless by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2024), CC BY-NC-SA 4.0. Black Marble night lights: NASA EOSDIS GIBS. Streets map and place names: data © OpenStreetMap contributors and others, rendering © EOX (maps.eox.at).</p>
