@@ -6,3 +6,7 @@
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+
+# Brand images: re-check with the server after an hour, so a changed logo shows up soon.
+/brand/*
+  Cache-Control: public, max-age=3600, must-revalidate

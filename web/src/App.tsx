@@ -325,7 +325,7 @@ export default function App() {
         <button type="button" className="icon-btn" aria-label={controlsOpen ? "Hide controls" : "Show controls"} aria-expanded={controlsOpen}
           onClick={() => setControlsOpen((v) => !v)}><Icon d={ICONS.menu} size={22} /></button>
         <div className="brand">
-          <img className="mark" src="./brand/sunders-planet.png" alt="" width={38} height={38} />
+          <img className="mark" src="./brand/planet-logo-v2.png" alt="" width={38} height={38} />
           <div>
             <div className="brand-name">Burning Calendar</div>
             <div className="brand-sub">One fire record from two generations of NASA satellites · NASA Space Apps Challenge 2026 · team Sunders</div>
