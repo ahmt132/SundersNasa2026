@@ -154,6 +154,7 @@ export default function App() {
   const [modal, setModal] = useState<null | "about" | "method" | "contact">(null);
   const finishRef = useRef<() => void>(() => undefined);
   const [pointsReady, setPointsReady] = useState(false);
+  const [pointsLoading, setPointsLoading] = useState(false);
   const [drawn, setDrawn] = useState(false);
   const [bootTimedOut, setBootTimedOut] = useState(false);
   useEffect(() => {
@@ -236,10 +237,13 @@ export default function App() {
   useEffect(() => {
     if (!windowEnd || !windowStart) return;
     let live = true;
+    // the message appears only if loading takes a moment (older dates), not for the quick recent days
+    const slow = window.setTimeout(() => live && setPointsLoading(true), 400);
     fetchPoints(windowStart, windowEnd, mapView)
       .then((r) => { if (live) { setPoints(r); setPointsReady(true); } })
-      .catch(() => live && setPointsReady(true));
-    return () => { live = false; };
+      .catch(() => live && setPointsReady(true))
+      .finally(() => { window.clearTimeout(slow); if (live) setPointsLoading(false); });
+    return () => { live = false; window.clearTimeout(slow); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [windowStart, windowEnd, mapView?.bounds.map((v) => v.toFixed(1)).join(",")]);
 
@@ -511,6 +515,13 @@ export default function App() {
             <span>{cursor ? `Lat ${cursor.lat.toFixed(3)}°, Lon ${cursor.lon.toFixed(3)}°` : "Lat –, Lon –"}</span>
             <span>Detections: {windowEnd ? `${windowStart === windowEnd ? windowEnd : `${windowStart} to ${windowEnd}`} (${windowDays} ${windowDays === 1 ? "day" : "days"})` : "–"}</span>
           </div>
+          {pointsLoading && !booting && (
+            <div className="map-loading" role="status">
+              <span className="spinner" aria-hidden="true" />
+              Loading fire detections for {windowStart === windowEnd ? windowEnd : `${windowStart} to ${windowEnd}`}… Busy months
+              can take a little while the first time; after that they open from your browser&apos;s memory.
+            </div>
+          )}
           {drawMode && (
             <div className="draw-hint" role="status">
               {drawMode === "rect" && "Drag on the map to draw a rectangle. Esc cancels."}

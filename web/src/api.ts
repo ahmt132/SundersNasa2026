@@ -132,6 +132,36 @@ type SeriesFile = Record<string, (string | number | boolean | null)[]>;
 const DATA = String(import.meta.env.VITE_DATA_URL || `${import.meta.env.BASE_URL}data`).replace(/\/+$/, "");
 const cache = new Map<string, Promise<unknown>>();
 
+// ---- data kept in the browser between visits (Cache API)
+// Data files never change without a new index.json, so they are stored under a name that contains
+// the index's build time; a new build starts a new store and the old one is deleted. index.json
+// itself is always fetched fresh. Any storage error (private mode, quota) just means no storage.
+const STORE_PREFIX = "harmonic-heat-data-";
+let storeName: string | null = null;
+function setStoreVersion(version: string): void {
+  const name = STORE_PREFIX + version;
+  if (storeName === name) return;
+  storeName = name;
+  try {
+    void caches.keys().then((keys) => keys.filter((k) => k.startsWith(STORE_PREFIX) && k !== name).forEach((k) => void caches.delete(k)));
+  } catch { /* no Cache API */ }
+}
+async function fromStore(key: string): Promise<ArrayBuffer | null> {
+  if (!storeName) return null;
+  try {
+    const hit = await (await caches.open(storeName)).match(key);
+    return hit ? await hit.arrayBuffer() : null;
+  } catch {
+    return null;
+  }
+}
+function toStore(key: string, buf: ArrayBuffer): void {
+  if (!storeName) return;
+  try {
+    void caches.open(storeName).then((c) => c.put(key, new Response(buf.slice(0)))).catch(() => undefined);
+  } catch { /* ignore */ }
+}
+
 // ---- download progress (for the loading screen)
 // Bytes are counted as they arrive. Content-Length is the size on the wire; when the server
 // compresses a file the decoded stream is longer, so each file's count is capped at its length.
@@ -177,12 +207,18 @@ async function readCounted(r: Response): Promise<ArrayBuffer> {
 
 function load<T>(path: string, kind: "json" | "bin"): Promise<T> {
   if (!cache.has(path)) {
-    const p = fetch(`${DATA}/${path}`)
-      .then(async (r) => {
+    const url = `${DATA}/${path}`;
+    const persist = path !== "index.json";
+    const p = (persist ? fromStore(url) : Promise.resolve(null))
+      .then(async (stored) => {
+        if (stored) return stored;
+        const r = await fetch(url);
         if (!r.ok) throw new ApiError(r.status, "missing_file", `Data file ${path} could not be loaded (${r.status}).`);
         const buf = await readCounted(r);
-        return kind === "json" ? JSON.parse(new TextDecoder().decode(buf)) : buf;
+        if (persist) toStore(url, buf);
+        return buf;
       })
+      .then((buf) => (kind === "json" ? JSON.parse(new TextDecoder().decode(buf)) : buf))
       .catch((e) => {
         cache.delete(path);
         if (e instanceof ApiError) throw e;
@@ -201,11 +237,16 @@ function loadRange(path: string, start: number, end: number): Promise<ArrayBuffe
   const key = `${path}#${start}-${end}`;
   if (end <= start) return Promise.resolve(new ArrayBuffer(0));
   if (!cache.has(key)) {
-    const p = fetch(`${DATA}/${path}`, { headers: { Range: `bytes=${start}-${end - 1}` } })
-      .then(async (r) => {
+    const storeKey = `${DATA}/${path}?bytes=${start}-${end}`;
+    const p = fromStore(storeKey)
+      .then(async (stored) => {
+        if (stored) return stored;
+        const r = await fetch(`${DATA}/${path}`, { headers: { Range: `bytes=${start}-${end - 1}` } });
         if (!r.ok) throw new ApiError(r.status, "missing_file", `Data file ${path} could not be loaded (${r.status}).`);
         const buf = await readCounted(r);
-        return r.status === 206 ? buf : buf.slice(start, end);
+        const part = r.status === 206 ? buf : buf.slice(start, end);
+        toStore(storeKey, part);
+        return part;
       })
       .catch((e) => {
         cache.delete(key);
@@ -217,7 +258,7 @@ function loadRange(path: string, start: number, end: number): Promise<ArrayBuffe
   return cache.get(key) as Promise<ArrayBuffer>;
 }
 
-const index = () => load<Index>("index.json", "json");
+const index = () => load<Index>("index.json", "json").then((idx) => { setStoreVersion(idx.generated_utc); return idx; });
 const seriesFile = (rid: string) => load<SeriesFile>(`r/${rid}/series.json`, "json");
 
 /** Read padded little-endian column blocks (see pipeline/export_static.py). */
@@ -285,7 +326,11 @@ const dayOfYear = (year: number, date: string) => Math.round((Date.parse(`${date
  * With d0/d1 (YYYY-MM-DD) covering only part of the month, just those days are fetched: first the
  * small day column, then the matching rows of every other column, each with a Range request.
  */
-async function hotspots(r: RegionIndex, year: number, month: number, d0?: string, d1?: string): Promise<Hotspots | null> {
+/** Columns the map dots use; the hotspot download needs all of them. */
+const MAP_COLS = new Set(["lat", "lon", "frp", "day", "time", "sat", "conf"]);
+
+async function hotspots(r: RegionIndex, year: number, month: number, d0?: string, d1?: string,
+  only?: Set<string>): Promise<Hotspots | null> {
   const key = `${year}-${String(month).padStart(2, "0")}`;
   const meta = r.hot[key];
   if (!meta) return null;
@@ -296,7 +341,8 @@ async function hotspots(r: RegionIndex, year: number, month: number, d0?: string
   const want0 = d0 ? Math.max(first, dayOfYear(year, d0)) : first;
   const want1 = d1 ? Math.min(last, dayOfYear(year, d1)) : last;
   if (want0 > want1) return null;
-  if (want0 <= first && want1 >= last) {
+  const wholeMonth = want0 <= first && want1 >= last;
+  if (wholeMonth && !only) {
     const buf = await load<ArrayBuffer>(path, "bin");
     const c = columns(buf, n, HOT_SPEC);
     return { ...(c as unknown as Omit<Hotspots, "n" | "year">), n, year };
@@ -309,12 +355,19 @@ async function hotspots(r: RegionIndex, year: number, month: number, d0?: string
     off += n * HOT_SIZE[t];
     off += (4 - (off % 4)) % 4;
   }
-  const dayCol = new Uint16Array(await loadRange(path, offs[3], offs[3] + 2 * n));
-  const lower = (v: number) => { let lo = 0, hi = n; while (lo < hi) { const mid = (lo + hi) >> 1; if (dayCol[mid] < v) lo = mid + 1; else hi = mid; } return lo; };
-  const i0 = lower(want0), i1 = lower(want1 + 1);
+  // whole month: every row; part of a month: read the day column first to find the rows
+  let i0 = 0, i1 = n, dayCol: Uint16Array | null = null;
+  if (!wholeMonth) {
+    dayCol = new Uint16Array(await loadRange(path, offs[3], offs[3] + 2 * n));
+    const col = dayCol;
+    const lower = (v: number) => { let lo = 0, hi = n; while (lo < hi) { const mid = (lo + hi) >> 1; if (col[mid] < v) lo = mid + 1; else hi = mid; } return lo; };
+    i0 = lower(want0);
+    i1 = lower(want1 + 1);
+  }
   const m = i1 - i0;
   const parts = await Promise.all(HOT_SPEC.map(async ([name, t], ci) => {
-    if (name === "day") return dayCol.slice(i0, i1);
+    if (only && !only.has(name)) return new HOT_CTOR[t](0);
+    if (name === "day" && dayCol) return dayCol.slice(i0, i1);
     const sz = HOT_SIZE[t];
     const buf = await loadRange(path, offs[ci] + i0 * sz, offs[ci] + i1 * sz);
     return new HOT_CTOR[t](buf);
@@ -831,7 +884,7 @@ export async function fetchPoints(d0: string, d1: string, view: View | null, cap
   }
   const blocks = view ? blocksInView(idx, view) : [];
   if (!view || !blocks.length || blocks.length > MAX_VIEW_BLOCKS) return { points: [], total: 0, stride: 1, modis: 0, zoomIn: true };
-  const jobs = blocks.flatMap((r) => monthsBetween(d0, d1).map(([y, mo]) => ({ y, h: hotspots(r, y, mo, d0, d1) })));
+  const jobs = blocks.flatMap((r) => monthsBetween(d0, d1).map(([y, mo]) => ({ y, h: hotspots(r, y, mo, d0, d1, MAP_COLS) })));
   for (const job of jobs) {
     const h = await job.h; // all files download at the same time; results are read in order
     if (!h) continue;
