@@ -32,6 +32,14 @@ export function fmt(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return "–";
   return Math.abs(v) < 10 && !Number.isInteger(v) ? nf1.format(v) : nf0.format(v);
 }
+/** Short numbers for legends where space is tight: 950, 1.2k, 12k, 203k, 1.4M. */
+export function fmtCompact(v: number): string {
+  const a = Math.abs(v);
+  const short = (x: number, unit: string) => `${x < 10 ? nf1.format(x) : nf0.format(x)}${unit}`;
+  if (a >= 1e6) return short(v / 1e6, "M");
+  if (a >= 1e3) return short(v / 1e3, "k");
+  return fmt(v);
+}
 export function fmtAxis(v: number): string {
   if (Math.abs(v) >= 1e6) return `${nf1.format(v / 1e6)}M`;
   if (Math.abs(v) >= 1e4) return `${nf1.format(v / 1e3)}K`;

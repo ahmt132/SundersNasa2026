@@ -3,7 +3,7 @@ import { useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent }
 import type { MonthRow } from "../api";
 import { ChartFrame, Segmented, TipRow, Tooltip, useWidth, type Tip } from "../chart";
 import {
-  ANOMALY_CLAMP, MONTHS, SAT_LABEL, T, anomalyScore, diverging, eraLabel, fmt, fmtPct, inferno,
+  ANOMALY_CLAMP, MONTHS, SAT_LABEL, T, anomalyScore, diverging, eraLabel, fmt, fmtCompact, fmtPct, inferno,
   makeValueScale, monthLabel, monthlyMedians,
 } from "../lib";
 
@@ -104,7 +104,9 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
   // ---- legend geometry
   const ly = TOP + gridH + 16;
   const rampW = Math.min(mode === "value" ? 220 : 300, Math.max(120, width - LEFT - 80));
-  const logTicks = [1, 10, 100, 1000, 10000, 100000].filter((v) => v <= vscale.max);
+  const logTicks = [1, 10, 100, 1000, 10000, 100000, 1000000].filter((v) => v <= vscale.max);
+  // Quantile legend: one box per class, wide enough for a short label such as "203k" between boxes.
+  const qStep = Math.max(30, Math.min(44, (width - LEFT - 40) / 7));
   const anomTicks = ([[-3, "−88%"], [-1, "−50%"], [0, "median"], [1, "+100%"], [3, "+700%"]] as [number, string][])
     .filter(([s]) => rampW >= 260 || Math.abs(s) !== 1);
 
@@ -192,9 +194,9 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
               )}
               {mode === "value" && vscale.kind === "quantile" ? (
                 vscale.classes.map((c, i) => (
-                  <g key={i} transform={`translate(${24 + i * 30},0)`}>
-                    <rect width={28} height={9} rx={2} fill={c} />
-                    {i > 0 && <text x={-1} y={23} textAnchor="middle" fontFamily={T.mono}>{fmt(vscale.breaks[i - 1])}</text>}
+                  <g key={i} transform={`translate(${24 + i * qStep},0)`}>
+                    <rect width={qStep - 2} height={9} rx={2} fill={c} />
+                    {i > 0 && <text x={-1} y={23} textAnchor="middle" fontFamily={T.mono}>{fmtCompact(vscale.breaks[i - 1])}</text>}
                   </g>
                 ))
               ) : (
@@ -203,7 +205,7 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
                   {mode === "value"
                     ? logTicks.map((v) => {
                         const x = (Math.log1p(v) / Math.log1p(vscale.max)) * rampW;
-                        return <text key={v} x={x} y={23} textAnchor="middle" fontFamily={T.mono}>{fmt(v)}</text>;
+                        return <text key={v} x={x} y={23} textAnchor="middle" fontFamily={T.mono}>{fmtCompact(v)}</text>;
                       })
                     : anomTicks.map(([s, label]) => (
                         <text key={s} x={((s + ANOMALY_CLAMP) / (2 * ANOMALY_CLAMP)) * rampW} y={23}
