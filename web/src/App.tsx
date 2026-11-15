@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
-  ApiError, DETAIL_ZOOM, calendarCsv, fetchCalendar, fetchCells, fetchPoints, fetchRegions, hotspotsCsv, saveBlob, summarize,
-  type CellsResponse, type Kpis, type Meta, type MonthRow, type PointsResult, type Query, type RegionsResponse, type View,
+  ApiError, DETAIL_ZOOM, calendarExport, fetchCalendar, fetchCells, fetchPoints, fetchRegions, hotspotsExport, saveBlob, summarize,
+  type CellsResponse, type ExportFormat, type Kpis, type Meta, type MonthRow, type PointsResult, type Query, type RegionsResponse, type View,
 } from "./api";
 import { Calendar } from "./components/Calendar";
 import { AnnualTotals, SeasonalProfile, SensorPanel } from "./components/Charts";
@@ -244,12 +244,12 @@ export default function App() {
       flash("Copy the address bar: it already encodes this view.");
     }
   };
-  const exportCsv = async (kind: "calendar" | "hotspots") => {
+  const exportFile = async (kind: "calendar" | "hotspots", format: ExportFormat) => {
     if (!query) return;
     flash(kind === "hotspots" ? "Preparing hotspot file…" : "Preparing calendar file…");
     try {
-      const blob = kind === "calendar" ? await calendarCsv(query, selLabel) : await hotspotsCsv(query, selLabel);
-      saveBlob(blob, kind === "calendar" ? `burning_calendar_${view.metric}.csv` : "hotspots.csv");
+      const blob = kind === "calendar" ? await calendarExport(query, selLabel, format) : await hotspotsExport(query, selLabel, format);
+      saveBlob(blob, kind === "calendar" ? `burning_calendar_${view.metric}.${format}` : `hotspots.${format}`);
       flash("Download ready.");
     } catch (e) {
       flash((e as Error).message);
@@ -463,8 +463,12 @@ export default function App() {
                   </select>
                 </label>
                 <div className="downloads">
-                  <button type="button" className="primary" disabled={!data} onClick={() => exportCsv("calendar")}>Calendar CSV</button>
-                  <button type="button" disabled={!data} onClick={() => exportCsv("hotspots")}>Hotspots CSV</button>
+                  <button type="button" className="primary" disabled={!data} onClick={() => exportFile("calendar", "csv")}>Calendar CSV</button>
+                  <button type="button" disabled={!data} onClick={() => exportFile("calendar", "xlsx")}
+                    title="Excel workbook: opens correctly in any language version of Excel">Calendar Excel</button>
+                  <button type="button" disabled={!data} onClick={() => exportFile("hotspots", "csv")}>Hotspots CSV</button>
+                  <button type="button" disabled={!data} onClick={() => exportFile("hotspots", "xlsx")}
+                    title="Excel workbook: opens correctly in any language version of Excel">Hotspots Excel</button>
                   <button type="button" disabled={!data} onClick={methodsNote}>Methods note</button>
                   <button type="button" onClick={share}>Copy share link</button>
                 </div>

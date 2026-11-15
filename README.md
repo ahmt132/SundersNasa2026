@@ -26,7 +26,7 @@ fire record has to cross that seam.
 2. **A website, the "burning calendar"**: a world map of recent hotspots plus a
    month × year calendar of harmonized fire activity for any area you choose — a preset, a
    rectangle, a polygon or a point with a radius. It has an anomaly mode (each month
-   against its usual level), key figures, charts, CSV downloads and shareable links. All
+   against its usual level), key figures, charts, CSV and Excel downloads and shareable links. All
    calculations run in the browser; there is no server to maintain.
 
 ## Results (held-out years, whole world, Nov 2022 – Nov 2026)

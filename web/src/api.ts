@@ -4,6 +4,8 @@
 // service returns: region selections use the exact precomputed region series; custom areas are
 // summed from 0.1-degree grid cells whose centre lies inside the shape.
 
+import { type Cell, xlsxBlob } from "./xlsx";
+
 export type Metric = "count" | "celldays";
 
 export type Selection =
@@ -646,11 +648,22 @@ export async function fetchPoints(d0: string, d1: string, view: View | null, cap
   return { ...thin(all, cap), zoomIn: false };
 }
 
-// ------------------------------------------------------------------ CSV exports
+// ------------------------------------------------------------------ exports (CSV and Excel)
 
 const MAX_EXPORT_ROWS = 500_000;
 
-function noteLines(meta: Meta, label: string, extra: string[]): string {
+/** One export as a table; written either as CSV (unchanged format) or as an Excel workbook. */
+interface ExportTable {
+  cols: string[];
+  rows: Cell[][];
+  notes: string[];
+  decimals: Record<string, number>;
+  widths: number[];
+}
+
+export type ExportFormat = "csv" | "xlsx";
+
+function noteList(meta: Meta, label: string, extra: string[]): string[] {
   return [
     "Burning calendar - harmonized MODIS + VIIRS active-fire hotspots",
     `Selection: ${label}; regions: ${meta.regions.join(", ")}`,
@@ -663,31 +676,49 @@ function noteLines(meta: Meta, label: string, extra: string[]): string {
     ...extra,
     `Pipeline run ${meta.pipeline_run_utc}; data files built ${meta.served_utc}; exported ${new Date().toISOString().slice(0, 19)}Z.`,
     meta.citation,
-  ].map((l) => `# ${l}\n`).join("");
+  ];
 }
 
-const csvCell = (v: unknown) => (v == null || (typeof v === "number" && !Number.isFinite(v)) ? "" : String(v));
+function toCsv(t: ExportTable): Blob {
+  const dec = t.cols.map((c) => t.decimals[c]);
+  const fmt = (v: Cell, d: number | undefined) =>
+    v == null ? "" : typeof v === "number" ? (!Number.isFinite(v) ? "" : d == null ? String(v) : v.toFixed(d)) : v;
+  const body = t.rows.map((r) => r.map((v, i) => fmt(v, dec[i])).join(",")).join("\n");
+  const notes = t.notes.map((l) => `# ${l}\n`).join("");
+  return new Blob([notes, t.cols.join(","), "\n", body, "\n"], { type: "text/csv;charset=utf-8" });
+}
 
-export async function calendarCsv(q: Query, label: string): Promise<Blob> {
+function toXlsx(t: ExportTable, dataName: string): Promise<Blob> {
+  return xlsxBlob([
+    { name: dataName, header: t.cols, rows: t.rows, decimals: t.decimals, widths: t.widths, freezeHeader: true },
+    { name: "Notes", header: ["About this file"], rows: t.notes.map((n) => [n]), widths: [140] },
+  ]);
+}
+
+const toText = (v: unknown): Cell => (v == null ? null : typeof v === "number" ? v : String(v));
+
+async function calendarTable(q: Query, label: string): Promise<ExportTable> {
   const { months, meta } = await fetchCalendar(q);
   const cols = ["month", "year", "moy", "harmonized", "lo", "hi", "modis_raw", "terra_raw", "aqua_raw", "viirs_snpp_raw",
     "viirs_n20_raw", "viirs_n21_raw", "source", "era", "method", "terra_only", "partial", "days_observed", "days_in_month"] as const;
-  const num = (v: number | null, d: number) => (v == null ? "" : v.toFixed(d));
-  const body = months.map((m) => cols.map((c) => {
+  const rows = months.map((m) => cols.map((c): Cell => {
     const v = m[c];
-    if (c === "harmonized" || c === "lo" || c === "hi") return num(v as number | null, 3);
-    if (c.endsWith("_raw")) return v == null ? "" : String(Math.round(v as number));
-    return csvCell(v);
-  }).join(",")).join("\n");
+    if (c.endsWith("_raw")) return v == null ? null : Math.round(v as number);
+    return toText(v);
+  }));
   const extra = [
     "Columns: harmonized = value to use; lo/hi = band; *_raw = unadjusted detections per sensor; source = sensor the " +
       "harmonized value comes from; partial = month not fully observed.",
     ...(meta.approximate ? ["Custom area: values are summed over 0.1-degree grid cells whose centre lies inside the shape."] : []),
   ];
-  return new Blob([noteLines(meta, label, extra), cols.join(","), "\n", body, "\n"], { type: "text/csv;charset=utf-8" });
+  return {
+    cols: [...cols], rows, notes: noteList(meta, label, extra),
+    decimals: { harmonized: 3, lo: 3, hi: 3 },
+    widths: [11, 6, 5, 12, 12, 12, 10, 10, 10, 14, 13, 13, 11, 15, 9, 10, 8, 13, 13],
+  };
 }
 
-export async function hotspotsCsv(q: Query, label: string): Promise<Blob> {
+async function hotspotsTable(q: Query, label: string): Promise<ExportTable> {
   const idx = await index();
   const { meta } = await fetchCalendar(q);
   const shape = shapeOf(q.sel, idx.presets as RegionInfo[]);
@@ -696,8 +727,7 @@ export async function hotspotsCsv(q: Query, label: string): Promise<Blob> {
   const d1 = new Date(Date.UTC(Number(endM.slice(0, 4)), Number(endM.slice(5, 7)), 0)).toISOString().slice(0, 10);
   const C = idx.grid.cell_per_deg, k = C / idx.grid.tile_per_deg;
   const satSeries: Record<string, string> = { Terra: "terra", Aqua: "aqua", SNPP: "viirs_snpp", NOAA20: "viirs_n20", NOAA21: "viirs_n21" };
-  const lines: string[] = [];
-  let total = 0;
+  const rows: Cell[][] = [];
   for (const r of idx.regions.filter((r) => overlaps(shape.bbox, r.bbox))) {
     const series = await seriesFile(r.id);
     const sourceByMonth = new Map<number, string>();
@@ -713,7 +743,7 @@ export async function hotspotsCsv(q: Query, label: string): Promise<Blob> {
         if (!shape.contains(lon, lat)) continue;
         const date = dayText(y, h.day[i]);
         if (date < d0 || date > d1) continue;
-        if (++total > MAX_EXPORT_ROWS)
+        if (rows.length >= MAX_EXPORT_ROWS)
           throw new ApiError(413, "export_too_large", `More than ${MAX_EXPORT_ROWS.toLocaleString("en-US")} hotspots fall in this area and period. Shorten the period or draw a smaller area, then export again.`);
         const sat = idx.sats[h.sat[i]];
         const series = satSeries[sat];
@@ -725,24 +755,43 @@ export async function hotspotsCsv(q: Query, label: string): Promise<Blob> {
         const used = (observed || series === source) && veg;
         const tx = Math.floor(Math.floor((lon + 180) * C) / k), ty = Math.floor(Math.floor((lat + 90) * C) / k);
         const wt = !used ? 0 : observed ? 1 : weight.get(`${m}|${tx}|${ty}|${source}`) ?? null;
-        lines.push([
-          lat.toFixed(5), lon.toFixed(5), date, String(h.time[i]).padStart(4, "0"), sat === "Terra" || sat === "Aqua" ? "MODIS" : "VIIRS",
-          sat, h.proc[i] ? "NRT" : "SP", CONF(h.conf[i]), Number.isFinite(h.frp[i]) ? h.frp[i].toFixed(2) : "",
-          ["D", "N", ""][h.dn[i]], type ?? "", r.id, used ? "True" : "False", wt == null ? "" : wt.toFixed(5),
-        ].join(","));
+        rows.push([
+          lat, lon, date, String(h.time[i]).padStart(4, "0"), sat === "Terra" || sat === "Aqua" ? "MODIS" : "VIIRS",
+          sat, h.proc[i] ? "NRT" : "SP", CONF(h.conf[i]), Number.isFinite(h.frp[i]) ? h.frp[i] : null,
+          ["D", "N", ""][h.dn[i]], type, r.id, used ? "True" : "False", wt,
+        ]);
       }
     }
   }
-  if (!lines.length) throw new ApiError(404, "empty_selection", "No hotspots were detected inside this area in the chosen period.");
+  if (!rows.length) throw new ApiError(404, "empty_selection", "No hotspots were detected inside this area in the chosen period.");
   const extra = [
     "Rows: individual cleaned detections (MODIS confidence >= 30, VIIRS nominal/high), both sensors.",
     "harmonization_weight: what this detection adds to the harmonized count. The sum of this column equals the harmonized " +
       "total for the grid cells the detections fall in. 0 = not used (other sensor is the source that month, or a non-vegetation type).",
     "type (standard processing only): 0 vegetation fire, 1 volcano, 2 other static land source, 3 offshore.",
   ];
-  const header = "latitude,longitude,acq_date,acq_time,sensor,satellite,processing,confidence,frp_mw,daynight,type,region,in_harmonized_series,harmonization_weight";
-  return new Blob([noteLines(meta, label, extra), header, "\n", lines.join("\n"), "\n"], { type: "text/csv;charset=utf-8" });
+  return {
+    cols: ["latitude", "longitude", "acq_date", "acq_time", "sensor", "satellite", "processing", "confidence", "frp_mw",
+      "daynight", "type", "region", "in_harmonized_series", "harmonization_weight"],
+    rows, notes: noteList(meta, label, extra),
+    decimals: { latitude: 5, longitude: 5, frp_mw: 2, harmonization_weight: 5 },
+    widths: [10, 11, 11, 9, 7, 9, 10, 10, 8, 8, 5, 11, 18, 20],
+  };
 }
+
+export async function calendarExport(q: Query, label: string, format: ExportFormat): Promise<Blob> {
+  const t = await calendarTable(q, label);
+  return format === "csv" ? toCsv(t) : toXlsx(t, "Burning calendar");
+}
+
+export async function hotspotsExport(q: Query, label: string, format: ExportFormat): Promise<Blob> {
+  const t = await hotspotsTable(q, label);
+  return format === "csv" ? toCsv(t) : toXlsx(t, "Hotspots");
+}
+
+/** The CSV files are unchanged by the Excel option. */
+export const calendarCsv = (q: Query, label: string) => calendarExport(q, label, "csv");
+export const hotspotsCsv = (q: Query, label: string) => hotspotsExport(q, label, "csv");
 
 export function saveBlob(blob: Blob, name: string): void {
   const url = URL.createObjectURL(blob);
