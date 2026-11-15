@@ -193,6 +193,30 @@ function load<T>(path: string, kind: "json" | "bin"): Promise<T> {
   return cache.get(path) as Promise<T>;
 }
 
+/**
+ * Bytes [start, end) of a data file, fetched with an HTTP Range request so large files are not
+ * downloaded whole. If the server ignores the range (status 200), the full answer is sliced.
+ */
+function loadRange(path: string, start: number, end: number): Promise<ArrayBuffer> {
+  const key = `${path}#${start}-${end}`;
+  if (end <= start) return Promise.resolve(new ArrayBuffer(0));
+  if (!cache.has(key)) {
+    const p = fetch(`${DATA}/${path}`, { headers: { Range: `bytes=${start}-${end - 1}` } })
+      .then(async (r) => {
+        if (!r.ok) throw new ApiError(r.status, "missing_file", `Data file ${path} could not be loaded (${r.status}).`);
+        const buf = await readCounted(r);
+        return r.status === 206 ? buf : buf.slice(start, end);
+      })
+      .catch((e) => {
+        cache.delete(key);
+        if (e instanceof ApiError) throw e;
+        throw new ApiError(0, "unreachable", `Data file ${path} could not be loaded. Check that the data was uploaded and that the data address allows this site (CORS).`);
+      });
+    cache.set(key, p);
+  }
+  return cache.get(key) as Promise<ArrayBuffer>;
+}
+
 const index = () => load<Index>("index.json", "json");
 const seriesFile = (rid: string) => load<SeriesFile>(`r/${rid}/series.json`, "json");
 
@@ -250,15 +274,53 @@ export interface Hotspots {
   dn: ArrayLike<number>; proc: ArrayLike<number>; year: number;
 }
 
-/** One month of cleaned hotspots for a region (files are split by month to keep downloads small). */
-async function hotspots(r: RegionIndex, year: number, month: number): Promise<Hotspots | null> {
+const HOT_SPEC: [string, "u8" | "i8" | "u16" | "i32" | "f32"][] = [["lat", "i32"], ["lon", "i32"], ["frp", "f32"], ["day", "u16"],
+  ["time", "u16"], ["sat", "u8"], ["conf", "u8"], ["type", "i8"], ["dn", "u8"], ["proc", "u8"]];
+const HOT_SIZE = { u8: 1, i8: 1, u16: 2, i32: 4, f32: 4 } as const;
+const HOT_CTOR = { u8: Uint8Array, i8: Int8Array, u16: Uint16Array, i32: Int32Array, f32: Float32Array } as const;
+const dayOfYear = (year: number, date: string) => Math.round((Date.parse(`${date}T00:00:00Z`) - Date.UTC(year, 0, 1)) / 864e5);
+
+/**
+ * Cleaned hotspots of one region and month (files are split by month; rows are in date order).
+ * With d0/d1 (YYYY-MM-DD) covering only part of the month, just those days are fetched: first the
+ * small day column, then the matching rows of every other column, each with a Range request.
+ */
+async function hotspots(r: RegionIndex, year: number, month: number, d0?: string, d1?: string): Promise<Hotspots | null> {
   const key = `${year}-${String(month).padStart(2, "0")}`;
   const meta = r.hot[key];
   if (!meta) return null;
-  const buf = await load<ArrayBuffer>(`r/${r.id}/hot/${key}.bin`, "bin");
-  const c = columns(buf, meta.n, [["lat", "i32"], ["lon", "i32"], ["frp", "f32"], ["day", "u16"], ["time", "u16"],
-    ["sat", "u8"], ["conf", "u8"], ["type", "i8"], ["dn", "u8"], ["proc", "u8"]]);
-  return { ...(c as unknown as Omit<Hotspots, "n" | "year">), n: meta.n, year };
+  const path = `r/${r.id}/hot/${key}.bin`;
+  const n = meta.n;
+  const first = dayOfYear(year, `${key}-01`);
+  const last = dayOfYear(year, new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10));
+  const want0 = d0 ? Math.max(first, dayOfYear(year, d0)) : first;
+  const want1 = d1 ? Math.min(last, dayOfYear(year, d1)) : last;
+  if (want0 > want1) return null;
+  if (want0 <= first && want1 >= last) {
+    const buf = await load<ArrayBuffer>(path, "bin");
+    const c = columns(buf, n, HOT_SPEC);
+    return { ...(c as unknown as Omit<Hotspots, "n" | "year">), n, year };
+  }
+  // byte offset of each column block (each block padded to 4 bytes, as written by export_static)
+  const offs: number[] = [];
+  let off = 0;
+  for (const [, t] of HOT_SPEC) {
+    offs.push(off);
+    off += n * HOT_SIZE[t];
+    off += (4 - (off % 4)) % 4;
+  }
+  const dayCol = new Uint16Array(await loadRange(path, offs[3], offs[3] + 2 * n));
+  const lower = (v: number) => { let lo = 0, hi = n; while (lo < hi) { const mid = (lo + hi) >> 1; if (dayCol[mid] < v) lo = mid + 1; else hi = mid; } return lo; };
+  const i0 = lower(want0), i1 = lower(want1 + 1);
+  const m = i1 - i0;
+  const parts = await Promise.all(HOT_SPEC.map(async ([name, t], ci) => {
+    if (name === "day") return dayCol.slice(i0, i1);
+    const sz = HOT_SIZE[t];
+    const buf = await loadRange(path, offs[ci] + i0 * sz, offs[ci] + i1 * sz);
+    return new HOT_CTOR[t](buf);
+  }));
+  const c = Object.fromEntries(HOT_SPEC.map(([name], ci) => [name, parts[ci]]));
+  return { ...(c as unknown as Omit<Hotspots, "n" | "year">), n: m, year };
 }
 
 /** Year-month pairs from d0 to d1 inclusive (YYYY-MM-DD strings). */
@@ -769,17 +831,16 @@ export async function fetchPoints(d0: string, d1: string, view: View | null, cap
   }
   const blocks = view ? blocksInView(idx, view) : [];
   if (!view || !blocks.length || blocks.length > MAX_VIEW_BLOCKS) return { points: [], total: 0, stride: 1, modis: 0, zoomIn: true };
-  for (const r of blocks) {
-    for (const [y, mo] of monthsBetween(d0, d1)) {
-      const h = await hotspots(r, y, mo);
-      if (!h) continue;
-      for (let i = 0; i < h.n; i++) {
-        const lon = h.lon[i] / 1e5, lat = h.lat[i] / 1e5;
-        if (!keep(lon, lat)) continue;
-        const date = dayText(y, h.day[i]);
-        if (date < d0 || date > d1) continue;
-        all.push({ lon, lat, sat: idx.sats[h.sat[i]], date, time: String(h.time[i]).padStart(4, "0"), frp: h.frp[i], conf: CONF(h.conf[i]) });
-      }
+  const jobs = blocks.flatMap((r) => monthsBetween(d0, d1).map(([y, mo]) => ({ y, h: hotspots(r, y, mo, d0, d1) })));
+  for (const job of jobs) {
+    const h = await job.h; // all files download at the same time; results are read in order
+    if (!h) continue;
+    for (let i = 0; i < h.n; i++) {
+      const lon = h.lon[i] / 1e5, lat = h.lat[i] / 1e5;
+      if (!keep(lon, lat)) continue;
+      const date = dayText(job.y, h.day[i]);
+      if (date < d0 || date > d1) continue;
+      all.push({ lon, lat, sat: idx.sats[h.sat[i]], date, time: String(h.time[i]).padStart(4, "0"), frp: h.frp[i], conf: CONF(h.conf[i]) });
     }
   }
   return { ...thin(all, cap), zoomIn: false };
@@ -873,7 +934,7 @@ async function hotspotsTable(q: Query, label: string): Promise<ExportTable> {
     const weight = new Map<string, number | null>();
     w.m.forEach((m, i) => weight.set(`${m}|${w.tx[i]}|${w.ty[i]}|${idx.predictors[w.p[i]]}`, w.w[i]));
     for (const [y, mo] of monthsBetween(d0, d1)) {
-      const h = await hotspots(r, y, mo);
+      const h = await hotspots(r, y, mo, d0, d1);
       if (!h) continue;
       for (let i = 0; i < h.n; i++) {
         const lon = h.lon[i] / 1e5, lat = h.lat[i] / 1e5;
