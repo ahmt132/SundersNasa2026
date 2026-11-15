@@ -171,8 +171,12 @@ export default function App() {
       .then((r) => {
         setRegions(r);
         if (r.last_day) {
-          setWindowEnd(r.last_day);
-          setWindowStart(addDays(r.last_day, -6));
+          const first = r.first_day ?? `${r.data_range.start}-01`;
+          const d = view.days;
+          const ok = !!d && d[0] >= first && d[1] <= r.last_day
+            && (Date.parse(d[1]) - Date.parse(d[0])) / 864e5 + 1 <= MAX_RANGE_DAYS;
+          setWindowEnd(ok ? d![1] : r.last_day);
+          setWindowStart(ok ? d![0] : addDays(r.last_day, -6));
         }
         // no area in the link, or one that no longer exists: start with the whole world
         const sel = view.sel;
@@ -214,6 +218,14 @@ export default function App() {
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.from, view.to, view.metric, detail]);
+
+  useEffect(() => {
+    if (!windowStart || !windowEnd || !regions?.last_day) return;
+    const latest7 = windowEnd === regions.last_day && windowStart === addDays(regions.last_day, -6);
+    const next: [string, string] | null = latest7 ? null : [windowStart, windowEnd];
+    if (next?.[0] !== view.days?.[0] || next?.[1] !== view.days?.[1]) setView({ days: next });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [windowStart, windowEnd, regions]);
 
   const windowDays = windowStart && windowEnd ? Math.round((Date.parse(windowEnd) - Date.parse(windowStart)) / 864e5) + 1 : 0;
   const lastDay = regions?.last_day ?? null;

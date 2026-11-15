@@ -1,6 +1,7 @@
 // View state lives in the URL query string, so any view can be shared as a link.
 //   sel=region:turkiye_med | bbox:w,s,e,n | circle:lat,lon,km | poly:lon,lat;lon,lat;...
 //   from=YYYY-MM  to=YYYY-MM  mode=value|anomaly  scale=log|quantile  metric=count|celldays  agg=month|year
+//   days=YYYY-MM-DD,YYYY-MM-DD   dates of the fire dots on the map (absent = the latest 7 days)
 import { useCallback, useEffect, useState } from "react";
 import type { Metric, Selection } from "./api";
 
@@ -12,10 +13,16 @@ export interface ViewState {
   scale: "log" | "quantile";
   metric: Metric;
   agg: "month" | "year";
+  days: [string, string] | null;
 }
 
 const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
 const isMonth = (s: string | null): s is string => !!s && /^\d{4}-(0[1-9]|1[0-2])$/.test(s);
+function parseDays(text: string | null): [string, string] | null {
+  const m = text?.match(/^(\d{4}-\d{2}-\d{2}),(\d{4}-\d{2}-\d{2})$/);
+  if (!m || Number.isNaN(Date.parse(m[1])) || Number.isNaN(Date.parse(m[2])) || m[1] > m[2]) return null;
+  return [m[1], m[2]];
+}
 
 function parseSel(text: string | null): Selection | null {
   if (!text) return null;
@@ -56,6 +63,7 @@ export function parseState(search: string): ViewState {
     scale: p.get("scale") === "quantile" ? "quantile" : "log",
     metric: p.get("metric") === "celldays" ? "celldays" : "count",
     agg: p.get("agg") === "year" ? "year" : "month",
+    days: parseDays(p.get("days")),
   };
 }
 
@@ -68,6 +76,7 @@ export function formatState(s: ViewState): string {
   if (s.scale !== "log") p.set("scale", s.scale);
   if (s.metric !== "count") p.set("metric", s.metric);
   if (s.agg !== "month") p.set("agg", s.agg);
+  if (s.days) p.set("days", `${s.days[0]},${s.days[1]}`);
   // Keep the separators readable in the address bar.
   return p.toString().replace(/%3A/g, ":").replace(/%2C/g, ",").replace(/%3B/g, ";");
 }
