@@ -131,10 +131,19 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
   const ly = TOP + gridH + 14;
   const rampW = Math.min(360, Math.max(140, width - LEFT - 120));
   const valueTicks = (() => {
-    // powers of ten inside the range, plus the two ends
-    const out: number[] = [];
-    for (let p = 1; p <= 1e7; p *= 10) if (p > vscale.min * 1.5 && p < vscale.max / 1.5) out.push(p);
-    return [vscale.min, ...out, vscale.max];
+    // the two ends, plus powers of ten in between; one label when every month has the same value,
+    // and no two labels closer than ~44 px (the end labels win)
+    if (vscale.max <= vscale.min) return [vscale.max];
+    const inner: number[] = [];
+    for (let p = 1; p <= 1e7; p *= 10) if (p > vscale.min * 1.5 && p < vscale.max / 1.5) inner.push(p);
+    const gap = 44 / rampW;
+    const keep = [vscale.min];
+    for (const v of inner) if (vscale.pos(v) - vscale.pos(keep[keep.length - 1]) >= gap && 1 - vscale.pos(v) >= gap) keep.push(v);
+    if (vscale.pos(vscale.max) - vscale.pos(keep[keep.length - 1]) < gap) {
+      if (keep.length === 1) return [vscale.max]; // ends too close to show both: keep the top value
+      keep.pop();
+    }
+    return [...keep, vscale.max];
   })();
   const qStep = Math.max(30, Math.min(52, (width - LEFT - 40) / 7));
   const anomTicks = ([[-3, "8× less"], [-1, "half"], [0, "usual"], [1, "double"], [3, "8× more"]] as [number, string][])
@@ -242,7 +251,7 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }:
                     {mode === "value"
                       ? valueTicks.map((v, i) => (
                           <text key={`${v}-${i}`} x={vscale.pos(v) * rampW} y={25}
-                            textAnchor={i === 0 ? "start" : i === valueTicks.length - 1 ? "end" : "middle"} fontFamily={T.mono}>{fmtCompact(v)}</text>
+                            textAnchor={valueTicks.length === 1 || i === valueTicks.length - 1 ? "end" : i === 0 ? "start" : "middle"} fontFamily={T.mono}>{fmtCompact(v)}</text>
                         ))
                       : anomTicks.map(([s, lab]) => (
                           <text key={s} x={((s + ANOMALY_CLAMP) / (2 * ANOMALY_CLAMP)) * rampW} y={25}
