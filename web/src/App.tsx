@@ -223,6 +223,21 @@ export default function App() {
     setWindowStart(addDays(lastDay, -(days - 1)));
     setRangeOpen(false);
   };
+  const minDate = (a: string, b: string | null) => (b && b < a ? b : a);
+  const maxDate = (a: string, b: string | null) => (b && b > a ? b : a);
+  /** New "to" after the start date changed: unchanged if still within 15 days, else start + 14 days. */
+  const clampTo = (from: string, to: string) => {
+    if (!from) return to;
+    const limit = minDate(addDays(from, MAX_RANGE_DAYS - 1), lastDay);
+    return !to || to < from || to > limit ? limit : to;
+  };
+  /** New "from" after the end date changed: unchanged if still within 15 days, else end − 14 days. */
+  const clampFrom = (to: string, from: string) => {
+    if (!to) return from;
+    const limit = maxDate(addDays(to, -(MAX_RANGE_DAYS - 1)), firstDay);
+    return !from || from > to || from < limit ? limit : from;
+  };
+  const toMax = rangeDraft.from ? minDate(addDays(rangeDraft.from, MAX_RANGE_DAYS - 1), lastDay) : lastDay ?? undefined;
   const applyRange = (e: FormEvent) => {
     e.preventDefault();
     const { from: a, to: b } = rangeDraft;
@@ -386,15 +401,15 @@ export default function App() {
                 <form className="range-form" onSubmit={applyRange}>
                   <label className="field"><span>From</span>
                     <input type="date" value={rangeDraft.from} min={firstDay ?? undefined} max={lastDay ?? undefined}
-                      onChange={(e) => setRangeDraft((d) => ({ ...d, from: e.target.value }))} />
+                      onChange={(e) => setRangeDraft((d) => ({ from: e.target.value, to: clampTo(e.target.value, d.to) }))} />
                   </label>
                   <label className="field"><span>To</span>
-                    <input type="date" value={rangeDraft.to} min={rangeDraft.from || firstDay || undefined} max={lastDay ?? undefined}
-                      onChange={(e) => setRangeDraft((d) => ({ ...d, to: e.target.value }))} />
+                    <input type="date" value={rangeDraft.to} min={rangeDraft.from || firstDay || undefined} max={toMax}
+                      onChange={(e) => setRangeDraft((d) => ({ from: clampFrom(e.target.value, d.from), to: e.target.value }))} />
                   </label>
                   <button type="submit" className="primary">Show</button>
                   <button type="button" onClick={() => setRangeOpen(false)}>Cancel</button>
-                  <p className="small">Any two dates between {firstDay} and {lastDay}, up to {MAX_RANGE_DAYS} days. Dates before the last 7 days are drawn for the area on screen, so zoom in to a region first.</p>
+                  <p className="small">Any period of up to {MAX_RANGE_DAYS} days between {firstDay} and {lastDay}. Dates before the last 7 days are drawn for the area on screen, so zoom in to a region first.</p>
                   {rangeError && <p className="error" role="alert">{rangeError}</p>}
                 </form>
               )}
