@@ -251,7 +251,7 @@ export default function App() {
     : `Drawing ${points.total.toLocaleString("en-US")} fire detections`;
 
   const range = regions?.data_range;
-  const from = view.from ?? range?.start ?? "2022-11";
+  const from = view.from ?? range?.start ?? "2000-11";
   const to = view.to ?? range?.end ?? "2026-11";
   const last12 = range ? addMonths(range.end, -11) : null;
   const unitShort = view.metric === "count" ? "hotspots" : "active cell-days";
@@ -611,7 +611,7 @@ function methodsText(data: Data, selLabel: string, from: string, to: string): st
     "- Hotspots are satellite pixel detections of active fire, not individual fires.",
     "- Cleaning: MODIS confidence >= 30; VIIRS confidence nominal or high; " +
       (data.meta.include_nonveg_types ? "all detection types included." : "only presumed vegetation fires (type 0) where the type is known."),
-    "- Data: FIRMS archive downloads supplied for the project, whole world, 13 Nov 2022 to 13 Nov 2026.",
+    "- Data: FIRMS yearly country archives (MODIS 2000-2022, S-NPP 2012-2022, NOAA-20 2018-2022) and FIRMS archive downloads 13 Nov 2022 to 13 Nov 2026, whole world.",
     "- The harmonized value is VIIRS (S-NPP, then NOAA-20/21) converted to MODIS-equivalent units. The transfer is fitted per 1-degree tile and calendar month where both sensors observed, with fallback to the 30-degree world block and the whole world where data is sparse.",
     "- The transfer method (Theil-Sen log-log, quantile mapping, or ratio) is the one with the lowest leave-one-year-out error for the region.",
     `- Uncertainty band: ${data.meta.band}. Zero width where MODIS is observed directly.`,

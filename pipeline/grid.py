@@ -20,7 +20,7 @@ import shutil
 
 import duckdb
 
-from .config import Config
+from .config import duck_connect, Config
 
 SERIES_CASE = (
     "CASE satellite WHEN 'Terra' THEN 'terra' WHEN 'Aqua' THEN 'aqua' WHEN 'SNPP' THEN 'viirs_snpp' "
@@ -36,7 +36,7 @@ def _reset(path) -> str:
 
 
 def run(cfg: Config, only: list[str] | None = None) -> None:
-    con = duckdb.connect()
+    con = duck_connect()
     C, F = cfg.cell_per_deg, cfg.fine_per_deg
     use = "TRUE" if cfg.include_nonveg_types else "veg"
     done = []

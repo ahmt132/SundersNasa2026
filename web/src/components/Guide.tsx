@@ -49,7 +49,7 @@ export const GUIDES: Record<ResultTab, { title: string; body: ReactNode }> = {
         <p>Each <strong>bar is one year</strong>: the total fire activity in the area for that year, in MODIS units.</p>
         <ul>
           <li><strong>Bright bars</strong> are complete years (all 12 months observed) and can be compared fairly.</li>
-          <li><strong>Brown bars</strong> are incomplete years (the data starts in November 2022 and ends in November 2026), so they are lower than a full year would be.</li>
+          <li><strong>Brown bars</strong> are incomplete years (the record starts in November 2000 and ends in November 2026), so they are lower than a full year would be.</li>
           <li>A dashed trend line appears once there are at least 5 complete years.</li>
         </ul>
       </>

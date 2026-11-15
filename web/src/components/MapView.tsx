@@ -282,7 +282,10 @@ export function MapView(p: Props) {
     const ro = new ResizeObserver(() => {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
+        // resize() re-sets the canvas size, which wipes the WebGL drawing buffer; without a
+        // redraw the map stays black until the user moves it.
         map.resize();
+        map.triggerRepaint();
         fitRef.current();
       }, 150);
     });

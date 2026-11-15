@@ -21,7 +21,7 @@ from pathlib import Path
 
 import duckdb
 
-from .config import Config
+from .config import duck_connect, Config
 from .ingest import STAGE_COLUMNS, _select_for_file, _sql_str
 
 COLS = "src_file, sensor, satellite, proc, latitude, longitude, acq_date, acq_time, daynight, confidence, frp, brightness, type"
@@ -77,7 +77,7 @@ def run(cfg: Config) -> dict:
     db = cfg.processed / "stage.duckdb"
     db.unlink(missing_ok=True)
     tmp = Path(tempfile.mkdtemp(dir=cfg.processed))
-    con = duckdb.connect(str(db))
+    con = duck_connect(str(db))
     con.execute(f"SET temp_directory = {_sql_str((tmp / 'spill').as_posix())}")
     con.execute("SET preserve_insertion_order = false")
     con.execute(f"CREATE TABLE stage ({STAGE_COLUMNS})")
@@ -130,17 +130,24 @@ def run(cfg: Config) -> dict:
             shutil.rmtree(out)
         out.mkdir(parents=True)
         block = _block_expr(cfg)
-        con.execute(f"""
-            COPY (
-                SELECT sensor, satellite, proc, latitude, longitude, acq_date, acq_time, daynight, confidence, frp,
-                       brightness, type, {block} AS region, year(acq_date) AS year
-                FROM (
-                    SELECT *, row_number() OVER (
-                        PARTITION BY satellite, acq_date, acq_time, round(latitude, 4), round(longitude, 4)
-                        ORDER BY proc DESC, src_file) AS rn
-                    FROM stage)
-                WHERE rn = 1
-            ) TO {_sql_str(out.as_posix())} (FORMAT PARQUET, PARTITION_BY (region, year), COMPRESSION ZSTD)""")
+        # Duplicates share acq_date, so removing them one year at a time gives exactly the same result
+        # as one pass over everything, while the sort spills only one year to disk (the 20+ year
+        # archive does not fit the temp space otherwise). Each year writes its own year=Y folders.
+        years = [y for (y,) in con.execute("SELECT DISTINCT year(acq_date) FROM stage ORDER BY 1").fetchall()]
+        for y in years:
+            con.execute(f"""
+                COPY (
+                    SELECT sensor, satellite, proc, latitude, longitude, acq_date, acq_time, daynight, confidence, frp,
+                           brightness, type, {block} AS region, year(acq_date) AS year
+                    FROM (
+                        SELECT *, row_number() OVER (
+                            PARTITION BY satellite, acq_date, acq_time, round(latitude, 4), round(longitude, 4)
+                            ORDER BY proc DESC, src_file) AS rn
+                        FROM stage WHERE year(acq_date) = {int(y)})
+                    WHERE rn = 1
+                ) TO {_sql_str(out.as_posix())} (FORMAT PARQUET, PARTITION_BY (region, year), COMPRESSION ZSTD,
+                                                 OVERWRITE_OR_IGNORE, FILENAME_PATTERN 'data_{int(y)}_{{i}}')""")
+            print(f"[ingest] {y}: duplicates removed and written ({time.time() - t0:,.0f} s)", flush=True)
         kept = con.execute(f"SELECT count(*) FROM read_parquet('{out.as_posix()}/*/*/*.parquet')").fetchone()[0]
         report["dropped_duplicates"] = count() - kept
         report["rows_kept"] = kept

@@ -1,6 +1,8 @@
 """Leave-one-year-out validation, method selection, and the per-region validation figure."""
 from __future__ import annotations
 
+import os
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 
 import numpy as np
@@ -32,15 +34,44 @@ def metrics(obs: np.ndarray, pred: np.ndarray) -> dict:
     return out
 
 
+# Worker state for the parallel folds: the pairs table is sent once per worker, not once per task.
+_POOL_PAIRS: pd.DataFrame | None = None
+_POOL_CFG: Config | None = None
+
+
+def _pool_init(pairs: pd.DataFrame, cfg: Config) -> None:
+    global _POOL_PAIRS, _POOL_CFG
+    _POOL_PAIRS, _POOL_CFG = pairs, cfg
+
+
+def _fold(year: int, method: str) -> tuple[int, str, np.ndarray]:
+    pairs, cfg = _POOL_PAIRS, _POOL_CFG
+    model = fit_hierarchy(pairs[pairs["year"] != year], method, cfg.min_pairs, cfg.max_fit_points, cfg.seed)
+    pred, _ = predict(model, pairs[pairs["year"] == year])
+    return year, method, pred
+
+
 def loyo(pairs: pd.DataFrame, cfg: Config) -> pd.DataFrame:
-    """Hold out each calendar year in turn; predict it from all the other years."""
+    """Hold out each calendar year in turn; predict it from all the other years.
+
+    Every (year, method) fit is independent and seeds its own random generator, so the folds run
+    in parallel processes (BURNCAL_WORKERS, default: all cores but one) with identical results.
+    """
+    years = sorted(pairs["year"].unique())
+    tasks = [(int(y), m) for y in years for m in cfg.methods]
+    workers = min(len(tasks), int(os.environ.get("BURNCAL_WORKERS", max(1, (os.cpu_count() or 2) - 1))))
+    if workers > 1:
+        with ProcessPoolExecutor(workers, initializer=_pool_init, initargs=(pairs, cfg)) as pool:
+            results = list(pool.map(_fold, *zip(*tasks)))
+    else:
+        _pool_init(pairs, cfg)
+        results = [_fold(y, m) for y, m in tasks]
+    preds = {(y, m): p for y, m, p in results}
     folds = []
-    for year in sorted(pairs["year"].unique()):
-        train = pairs[pairs["year"] != year]
+    for year in years:
         test = pairs[pairs["year"] == year].copy()
         for method in cfg.methods:
-            model = fit_hierarchy(train, method, cfg.min_pairs, cfg.max_fit_points, cfg.seed)
-            test[f"pred_{method}"], _ = predict(model, test)
+            test[f"pred_{method}"] = preds[(int(year), method)]
         folds.append(test)
     return pd.concat(folds, ignore_index=True)
 

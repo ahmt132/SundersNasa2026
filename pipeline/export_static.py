@@ -35,14 +35,16 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from .config import SERIES, Config
+from .config import duck_connect, SERIES, Config
 
 SATS = ["Terra", "Aqua", "SNPP", "NOAA20", "NOAA21"]
 RECENT_DAYS = 7
 PREDICTORS = ["modis", "terra", "aqua", "viirs_snpp", "viirs_n20", "viirs_n21"]
 CITATION = (
     "Data: NASA FIRMS (Fire Information for Resource Management System), part of NASA LANCE/ESDIS - "
-    "MODIS Collection 6.1 and VIIRS 375 m active fire products. https://firms.modaps.eosdis.nasa.gov/"
+    "MODIS Collection 6.1 and VIIRS 375 m active fire products. https://firms.modaps.eosdis.nasa.gov/ "
+    "Yearly country archives (MODIS from 1 Nov 2000, S-NPP from 20 Jan 2012, NOAA-20 from 1 Apr 2018, through 2022) "
+    "and archive downloads 13 Nov 2022 - 13 Nov 2026 (S-NPP, NOAA-20, NOAA-21, MODIS), whole world."
 )
 
 
@@ -90,7 +92,7 @@ def run(cfg: Config, out: str, keep_hotspots: bool = False) -> None:
             shutil.rmtree(out_dir)  # generated output only
         out_dir.mkdir(parents=True)
     old_hot = {r["id"]: r for r in old_index["regions"]} if old_index else {}
-    con = duckdb.connect()
+    con = duck_connect()
     k = meta["grid"]["cell_per_deg"] // meta["grid"]["tile_per_deg"]
     regions, total_bytes = [], 0
 
