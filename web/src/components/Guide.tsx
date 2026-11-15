@@ -24,7 +24,7 @@ export const GUIDES: Record<ResultTab, { title: string; body: ReactNode }> = {
           <li><strong>Striped squares</strong> are months that were only partly observed (the first and last months of the data). They look lower than they really were.</li>
         </ul>
         <p><strong>Compared with usual</strong> colours each month by how it differs from the same month in the other years: orange = more fire than usual, purple = less, grey = about normal.</p>
-        <p>Hover over (or tap) any square for the exact numbers from each satellite.</p>
+        <p>Hover over (or tap) any square for the exact numbers from each satellite. <strong>Click a square</strong> to see that month&apos;s fires on the map.</p>
       </>
     ),
   },
@@ -78,7 +78,7 @@ export function FullGuide() {
     <>
       <h3>The map</h3>
       <ul>
-        <li><strong>Red dots</strong> are VIIRS fire detections and <strong>yellow rings</strong> are MODIS detections, for the days chosen at the top of the left panel (the last 7 days by default). Click a dot for its details.</li>
+        <li><strong>Red dots</strong> are VIIRS fire detections and <strong>yellow rings</strong> are MODIS detections, for the days chosen under &quot;Fires on the map&quot; (the last 7 days by default, or any whole month). Click a dot for its details.</li>
         <li>The <strong>coloured squares</strong> under the dots are the total fire activity of the whole analysis period per grid square (1° when zoomed out, 0.1° when zoomed in).</li>
         <li>A detection is one hot satellite pixel, not one fire: a big fire gives many detections. Clouds and smoke can hide fires.</li>
       </ul>
