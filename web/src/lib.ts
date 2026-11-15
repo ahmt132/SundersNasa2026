@@ -15,8 +15,8 @@ export const T = {
   modis: "#3f97d1",
   viirs: "#b8669a",
   zero: "#262c48", // a month with data and zero detections
-  sans: "'IBM Plex Sans', system-ui, sans-serif",
-  mono: "'IBM Plex Mono', ui-monospace, monospace",
+  sans: "'Times New Roman', Times, serif",
+  mono: "'Times New Roman', Times, serif",
 };
 // Categorical trio validated with the dataviz palette validator on surface #222326 (dark mode); the
 // surface is now navy #12162a and the check was re-run on it (2026-11-15): lightness band, chroma

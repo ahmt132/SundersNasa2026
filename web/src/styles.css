@@ -16,8 +16,8 @@
   --ink3: #9896ae;
   --accent: #d9641f;
   --accent-ink: #160a03;
-  --sans: "IBM Plex Sans", system-ui, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --sans: "Times New Roman", Times, serif;
+  --mono: "Times New Roman", Times, serif;
   color-scheme: dark;
 }
 
