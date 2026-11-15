@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 from . import validate
-from .config import METRICS, SERIES, Config
+from .config import duck_connect, METRICS, SERIES, Config
 from .transfer import LEVEL_NAMES, fit_hierarchy, predict
 from .uncertainty import BandLookup, build_table
 
@@ -175,7 +175,7 @@ def make_pairs(wide: pd.DataFrame, state: pd.DataFrame, predictor: str, start, e
 
 
 def run(cfg: Config, figures: bool = True) -> dict:
-    con = duckdb.connect()
+    con = duck_connect()
     tiles = load_tiles(cfg, con)
     if tiles.empty:
         raise SystemExit("[harmonize] no gridded data found - run the ingest and grid stages first")

@@ -632,7 +632,7 @@ function noteLines(meta: Meta, label: string, extra: string[]): string {
     "Burning calendar - harmonized MODIS + VIIRS active-fire hotspots",
     `Selection: ${label}; regions: ${meta.regions.join(", ")}`,
     `Unit: ${meta.unit}`,
-    "Data: FIRMS archive downloads supplied for the project, whole world, 2022-11-13 to 2026-11-13. " +
+    "Data: FIRMS yearly country archives (MODIS 2000-2022, S-NPP 2012-2022, NOAA-20 2018-2022) and FIRMS archive downloads 2022-11-13 to 2026-11-13, whole world. " +
       "Method: VIIRS converted to MODIS-equivalent units with a transfer fitted where MODIS and VIIRS both observed, chosen " +
       "by leave-one-year-out validation. See METHODS.md.",
     `Uncertainty (lo, hi): ${meta.band}. Zero width where MODIS is observed directly.`,

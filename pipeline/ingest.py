@@ -18,7 +18,7 @@ from pathlib import Path
 
 import duckdb
 
-from .config import Config, Region
+from .config import duck_connect, Config, Region
 
 STAGE_COLUMNS = """
     src_file VARCHAR, sensor VARCHAR, satellite VARCHAR, proc VARCHAR,
@@ -216,7 +216,7 @@ def ingest_region(con: duckdb.DuckDBPyConnection, cfg: Config, region: Region) -
 
 
 def run(cfg: Config, only: list[str] | None = None) -> dict:
-    con = duckdb.connect()
+    con = duck_connect()
     report_path = cfg.processed / "ingest_report.json"
     reports = json.loads(report_path.read_text("utf-8")) if report_path.exists() else {}
     for rid, region in cfg.regions.items():

@@ -35,7 +35,7 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from .config import SERIES, Config
+from .config import duck_connect, SERIES, Config
 
 SATS = ["Terra", "Aqua", "SNPP", "NOAA20", "NOAA21"]
 RECENT_DAYS = 7
@@ -82,7 +82,7 @@ def run(cfg: Config, out: str) -> None:
     if out_dir.exists():
         shutil.rmtree(out_dir)  # generated output only
     out_dir.mkdir(parents=True)
-    con = duckdb.connect()
+    con = duck_connect()
     k = meta["grid"]["cell_per_deg"] // meta["grid"]["tile_per_deg"]
     regions, total_bytes = [], 0
 

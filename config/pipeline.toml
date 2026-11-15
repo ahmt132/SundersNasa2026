@@ -1,6 +1,11 @@
 # Pipeline configuration.
-# Data: the FIRMS archive-download zips from the project's Google Drive folder ("Nasa SpaceApps 2026"),
-# global, 13 Nov 2022 - 13 Nov 2026. Put them (or zips containing them) in the folders under [paths].
+# Data, all from NASA FIRMS, whole world:
+#   data/drive        archive-download zips (DL_FIRE_*), 13 Nov 2022 - 13 Nov 2026
+#   data/drive_part1  yearly country archives (modis_YYYY / viirs-snpp_YYYY / viirs-jpss1_YYYY _all_countries.zip)
+#                     from https://firms.modaps.eosdis.nasa.gov/data/country/zips/ :
+#                     MODIS 2000-2022, S-NPP 2012-2022, NOAA-20 2018-2022 (every year present)
+# Overlap with the archive downloads (13 Nov - 31 Dec 2022) is removed as exact duplicates in ingest.
+# Any month a satellite has no file for is marked "not observed" by harmonize.mark_gaps, never zero fires.
 # bbox order everywhere is west, south, east, north.
 
 [paths]
@@ -39,10 +44,10 @@ seed = 20261112
 # are not mistaken for missing data.
 snap_days = 60
 [coverage.nominal_start]
-terra = "2022-11-13"          # start of the Drive archive downloads
-aqua = "2022-11-13"
-viirs_snpp = "2022-11-13"
-viirs_n20 = "2022-11-13"
+terra = "2000-11-01"          # first day in the data supplied (read from modis_2000_all_countries.zip)
+aqua = "2002-07-04"           # first Aqua day (modis_2002_all_countries.zip)
+viirs_snpp = "2012-01-20"     # first S-NPP day (viirs-snpp_2012_all_countries.zip)
+viirs_n20 = "2018-04-01"      # first NOAA-20 day (viirs-jpss1_2018_all_countries.zip)
 viirs_n21 = "2023-03-01"      # VERIFY: first NOAA-21 day in the archive (read from the data: 2023-03-01)
 
 [world]

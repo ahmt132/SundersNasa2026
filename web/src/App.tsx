@@ -193,7 +193,7 @@ export default function App() {
   }, [windowStart, windowEnd, windowEnd === regions?.last_day ? "" : mapView?.bounds.map((v) => v.toFixed(1)).join(",")]);
 
   const range = regions?.data_range;
-  const from = view.from ?? range?.start ?? "2022-11";
+  const from = view.from ?? range?.start ?? "2000-11";
   const to = view.to ?? range?.end ?? "2025-12";
   const unitShort = view.metric === "count" ? "hotspots" : "active cell-days";
   const selLabel = view.sel && regions ? selectionLabel(view.sel, regions.regions) : "";
@@ -456,7 +456,7 @@ export default function App() {
       {modal === "methods" && (
         <Modal title="Methods" onClose={() => setModal(null)}>
           <p>Both sensors are cleaned (MODIS confidence ≥ 30; VIIRS nominal or high; vegetation fires only where the type is known) and counted per month on a shared 0.1° grid.</p>
-          <p>Data: the FIRMS archive downloads supplied for this project, whole world, 13 November 2022 to 13 November 2026 (standard processing, then near-real-time for the last months).</p>
+          <p>Data: the FIRMS yearly country archives (MODIS from 1 November 2000, VIIRS S-NPP from 20 January 2012, NOAA-20 from 1 April 2018, through 2022) and the FIRMS archive downloads for 13 November 2022 to 13 November 2026, whole world. Months without data for a satellite are shown as not observed, never as zero fires. Standard processing throughout, then near-real-time for the last months.</p>
           <p>VIIRS (S-NPP, NOAA-20, NOAA-21) sees roughly three to four times more hotspots than MODIS for the same fires, because its pixels are smaller. The harmonized value converts VIIRS to MODIS-equivalent units, so the record can continue on VIIRS alone once MODIS stops. The conversion is fitted per 1° tile and calendar month where MODIS and VIIRS both observed, falling back to the 30° world block and then the whole world where data is sparse. Three methods compete (Theil–Sen log-log, quantile mapping, ratio); the one with the lowest leave-one-year-out error is used for each block.</p>
           <p>The uncertainty band is the 5th–95th percentile of those held-out errors. The sensor transparency chart compares raw MODIS, raw VIIRS and the harmonized series over the overlap.</p>
           <p>Full write-up: METHODS.md in the project repository.</p>
@@ -482,7 +482,7 @@ function methodsText(data: Data, selLabel: string, from: string, to: string): st
     "- Hotspots are satellite pixel detections of active fire, not individual fires.",
     "- Cleaning: MODIS confidence >= 30; VIIRS confidence nominal or high; " +
       (data.meta.include_nonveg_types ? "all detection types included." : "only presumed vegetation fires (type 0) where the type is known."),
-    "- Data: FIRMS archive downloads supplied for the project, whole world, 13 Nov 2022 to 13 Nov 2026.",
+    "- Data: FIRMS yearly country archives (MODIS 2000-2022, S-NPP 2012-2022, NOAA-20 2018-2022) and FIRMS archive downloads 13 Nov 2022 to 13 Nov 2026, whole world.",
     "- The harmonized value is VIIRS (S-NPP, then NOAA-20/21) converted to MODIS-equivalent units. The transfer is fitted per 1-degree tile and calendar month where both sensors observed, with fallback to the 30-degree world block and the whole world where data is sparse.",
     "- The transfer method (Theil-Sen log-log, quantile mapping, or ratio) is the one with the lowest leave-one-year-out error for the region.",
     `- Uncertainty band: ${data.meta.band}. Zero width where MODIS is observed directly.`,

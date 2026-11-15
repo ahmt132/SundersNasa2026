@@ -5,6 +5,22 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import os
+
+import duckdb
+
+# DuckDB's default is 80 % of RAM. On a 16 GB laptop that pushes Windows into paging (the pagefile
+# grew to 26 GB and the run slowed to hours), so the pipeline caps it; larger sorts spill to temp
+# files instead. Override with BURNCAL_DUCKDB_MEMORY, e.g. "10GB".
+DUCKDB_MEMORY = os.environ.get("BURNCAL_DUCKDB_MEMORY", "6GB")
+
+
+def duck_connect(database: str = ":memory:") -> duckdb.DuckDBPyConnection:
+    """DuckDB connection with the pipeline's memory cap applied."""
+    con = duckdb.connect(database)
+    con.execute(f"SET memory_limit = '{DUCKDB_MEMORY}'")
+    return con
+
 # Internal series names. "modis" always means Terra + Aqua combined.
 MODIS_SATS = ("Terra", "Aqua")
 SAT_TO_SERIES = {
