@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
     <title>Burning calendar · Team Sunders</title>
-    <link rel="icon" type="image/png" href="./favicon.png" />
+    <link rel="icon" type="image/png" href="./favicon-v2.png" />
     <meta name="theme-color" content="#000000" />
-    <link rel="preload" as="image" href="./brand/sunders-planet-lg.png" />
+    <link rel="preload" as="image" href="./brand/planet-loading-v2.png" />
     <!-- Loading screen: plain HTML and CSS so it shows before the app's JavaScript has arrived.
          src/components/BootScreen.tsx drives the progress bar and removes it once the map is drawn. -->
     <style>
@@ -15,7 +15,7 @@
         flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 24px;
         font-family: "Times New Roman", Times, serif; transition: opacity 0.45s ease; }
       #boot.done { opacity: 0; pointer-events: none; }
-      #boot img { width: min(274px, 62vw); height: auto; }
+      #boot img { width: min(272px, 62vw); height: auto; }
       #boot .boot-title { font-size: 26px; font-weight: 600; letter-spacing: 0.01em; margin-top: 6px; text-align: center; }
       #boot .boot-sub { font-size: 16px; color: #b9b7cc; text-align: center; margin-top: -10px; }
       #boot .boot-bar { width: min(420px, 80vw); height: 6px; border-radius: 3px; background: #1d2240; overflow: hidden; }
@@ -27,7 +27,7 @@
   </head>
   <body>
     <div id="boot" role="status" aria-live="polite">
-      <img src="./brand/sunders-planet-lg.png" alt="Team Sunders" width="274" height="274" />
+      <img src="./brand/planet-loading-v2.png" alt="Team Sunders" width="272" height="272" />
       <div class="boot-title">Burning Calendar</div>
       <div class="boot-sub">A NASA Space Apps Challenge 2026 project by team Sunders</div>
       <div class="boot-bar" aria-hidden="true"><div class="boot-fill"></div></div>
