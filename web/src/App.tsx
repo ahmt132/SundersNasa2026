@@ -20,7 +20,9 @@ const CONTACTS = ["a.sungur2008@gmail.com", "alexcemanders32@gmail.com"];
 const TEAM_PAGE = "https://www.spaceappschallenge.org/2026/find-a-team/sunders/";
 
 const WINDOWS = [{ days: 1, label: "24 HRS" }, { days: 3, label: "3 DAYS" }, { days: 7, label: "7 DAYS" }] as const;
-const MAX_RANGE_DAYS = 92; // individual detections for longer periods are too many to draw; the calendar covers those
+// At most 15 days of individual detections on the map: such a window never covers a whole month, so
+// only those days are read from the month files (fast), and the number of dots stays drawable.
+const MAX_RANGE_DAYS = 15;
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 /** YYYY-MM shifted by n months. */
 const addMonths = (ym: string, n: number) => {
@@ -39,6 +41,7 @@ function Icon({ d, size = 18 }: { d: string; size?: number }) {
 const ICONS = {
   menu: "M3 6h18M3 12h18M3 18h18",
   close: "M6 6l12 12M18 6L6 18",
+  check: "M5 12l5 5L20 7",
   link: "M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1 1M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1-1",
   book: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5",
   mail: "M4 5h16v14H4zM4 6l8 7 8-7",
@@ -221,6 +224,21 @@ export default function App() {
     setWindowStart(addDays(lastDay, -(days - 1)));
     setRangeOpen(false);
   };
+  const minDate = (a: string, b: string | null) => (b && b < a ? b : a);
+  const maxDate = (a: string, b: string | null) => (b && b > a ? b : a);
+  /** New "to" after the start date changed: unchanged if still within 15 days, else start + 14 days. */
+  const clampTo = (from: string, to: string) => {
+    if (!from) return to;
+    const limit = minDate(addDays(from, MAX_RANGE_DAYS - 1), lastDay);
+    return !to || to < from || to > limit ? limit : to;
+  };
+  /** New "from" after the end date changed: unchanged if still within 15 days, else end − 14 days. */
+  const clampFrom = (to: string, from: string) => {
+    if (!to) return from;
+    const limit = maxDate(addDays(to, -(MAX_RANGE_DAYS - 1)), firstDay);
+    return !from || from > to || from < limit ? limit : from;
+  };
+  const toMax = rangeDraft.from ? minDate(addDays(rangeDraft.from, MAX_RANGE_DAYS - 1), lastDay) : lastDay ?? undefined;
   const applyRange = (e: FormEvent) => {
     e.preventDefault();
     const { from: a, to: b } = rangeDraft;
@@ -277,13 +295,19 @@ export default function App() {
     setNotice(text);
     window.setTimeout(() => setNotice(""), 4500);
   };
+  const [shared, setShared] = useState<null | "ok" | "fail">(null);
+  const sharedTimer = useRef(0);
   const share = async () => {
+    let ok = false;
     try {
       await navigator.clipboard.writeText(window.location.href);
-      flash("Link copied. It reopens this exact view.");
+      ok = true;
     } catch {
-      flash("Copy the address bar: it already encodes this view.");
+      ok = false;
     }
+    setShared(ok ? "ok" : "fail");
+    window.clearTimeout(sharedTimer.current);
+    sharedTimer.current = window.setTimeout(() => setShared(null), ok ? 2500 : 5000);
   };
   const exportFile = async (kind: "calendar" | "hotspots", format: ExportFormat) => {
     if (!query) return;
@@ -341,8 +365,17 @@ export default function App() {
           <button type="button" onClick={() => setModal("about")}><Icon d={ICONS.info} /> <span>About</span></button>
           <button type="button" onClick={() => setModal("method")}><Icon d={ICONS.book} /> <span>How it works</span></button>
           <button type="button" onClick={() => setModal("contact")}><Icon d={ICONS.mail} /> <span>Contact</span></button>
-          <button type="button" onClick={share}><Icon d={ICONS.link} /> <span>Share link</span></button>
+          <button type="button" onClick={share} className={shared === "ok" ? "share-done" : undefined}>
+            <Icon d={shared === "ok" ? ICONS.check : ICONS.link} /> <span>{shared === "ok" ? "Link copied" : "Share link"}</span>
+          </button>
         </nav>
+        {shared && (
+          <div className={shared === "ok" ? "share-toast" : "share-toast fail"} role="status">
+            {shared === "ok"
+              ? <><strong>Link copied!</strong> Paste it anywhere: it opens this exact view (area, period and settings).</>
+              : <>Could not copy automatically. Copy the address bar instead: it already holds this exact view.</>}
+          </div>
+        )}
       </header>
 
       <div className="workspace">
@@ -386,15 +419,15 @@ export default function App() {
                 <form className="range-form" onSubmit={applyRange}>
                   <label className="field"><span>From</span>
                     <input type="date" value={rangeDraft.from} min={firstDay ?? undefined} max={lastDay ?? undefined}
-                      onChange={(e) => setRangeDraft((d) => ({ ...d, from: e.target.value }))} />
+                      onChange={(e) => setRangeDraft((d) => ({ from: e.target.value, to: clampTo(e.target.value, d.to) }))} />
                   </label>
                   <label className="field"><span>To</span>
-                    <input type="date" value={rangeDraft.to} min={rangeDraft.from || firstDay || undefined} max={lastDay ?? undefined}
-                      onChange={(e) => setRangeDraft((d) => ({ ...d, to: e.target.value }))} />
+                    <input type="date" value={rangeDraft.to} min={rangeDraft.from || firstDay || undefined} max={toMax}
+                      onChange={(e) => setRangeDraft((d) => ({ from: clampFrom(e.target.value, d.from), to: e.target.value }))} />
                   </label>
                   <button type="submit" className="primary">Show</button>
                   <button type="button" onClick={() => setRangeOpen(false)}>Cancel</button>
-                  <p className="small">Any two dates between {firstDay} and {lastDay}, up to {MAX_RANGE_DAYS} days. Dates before the last 7 days are drawn for the area on screen, so zoom in to a region first.</p>
+                  <p className="small">Any period of up to {MAX_RANGE_DAYS} days between {firstDay} and {lastDay}. Dates before the last 7 days are drawn for the area on screen, so zoom in to a region first.</p>
                   {rangeError && <p className="error" role="alert">{rangeError}</p>}
                 </form>
               )}
