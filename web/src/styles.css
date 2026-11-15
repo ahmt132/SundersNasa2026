@@ -278,3 +278,16 @@ input { width: 100%; font-family: var(--mono); }
   animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+/* ---------- share link confirmation */
+.topbar { position: relative; }
+.top-links button.share-done { background: rgba(120, 220, 140, 0.18); color: #c8f5d2; }
+.share-toast {
+  position: absolute; top: calc(100% + 8px); right: 14px; z-index: 30; max-width: min(380px, calc(100vw - 28px));
+  background: #14331f; border: 1px solid #5fcf86; color: #e6f8ec; border-radius: 4px; padding: 8px 12px; font-size: 14px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45); animation: toast-in 0.18s ease-out;
+}
+.share-toast strong { color: #fff; }
+.share-toast.fail { background: #3a2a12; border-color: #e2b13c; color: #f7ecd6; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .share-toast { animation: none; } }

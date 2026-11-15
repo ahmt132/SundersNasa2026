@@ -41,6 +41,7 @@ function Icon({ d, size = 18 }: { d: string; size?: number }) {
 const ICONS = {
   menu: "M3 6h18M3 12h18M3 18h18",
   close: "M6 6l12 12M18 6L6 18",
+  check: "M5 12l5 5L20 7",
   link: "M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1 1M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1-1",
   book: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5",
   mail: "M4 5h16v14H4zM4 6l8 7 8-7",
@@ -292,13 +293,19 @@ export default function App() {
     setNotice(text);
     window.setTimeout(() => setNotice(""), 4500);
   };
+  const [shared, setShared] = useState<null | "ok" | "fail">(null);
+  const sharedTimer = useRef(0);
   const share = async () => {
+    let ok = false;
     try {
       await navigator.clipboard.writeText(window.location.href);
-      flash("Link copied. It reopens this exact view.");
+      ok = true;
     } catch {
-      flash("Copy the address bar: it already encodes this view.");
+      ok = false;
     }
+    setShared(ok ? "ok" : "fail");
+    window.clearTimeout(sharedTimer.current);
+    sharedTimer.current = window.setTimeout(() => setShared(null), ok ? 2500 : 5000);
   };
   const exportFile = async (kind: "calendar" | "hotspots", format: ExportFormat) => {
     if (!query) return;
@@ -356,8 +363,17 @@ export default function App() {
           <button type="button" onClick={() => setModal("about")}><Icon d={ICONS.info} /> <span>About</span></button>
           <button type="button" onClick={() => setModal("method")}><Icon d={ICONS.book} /> <span>How it works</span></button>
           <button type="button" onClick={() => setModal("contact")}><Icon d={ICONS.mail} /> <span>Contact</span></button>
-          <button type="button" onClick={share}><Icon d={ICONS.link} /> <span>Share link</span></button>
+          <button type="button" onClick={share} className={shared === "ok" ? "share-done" : undefined}>
+            <Icon d={shared === "ok" ? ICONS.check : ICONS.link} /> <span>{shared === "ok" ? "Link copied" : "Share link"}</span>
+          </button>
         </nav>
+        {shared && (
+          <div className={shared === "ok" ? "share-toast" : "share-toast fail"} role="status">
+            {shared === "ok"
+              ? <><strong>Link copied!</strong> Paste it anywhere: it opens this exact view (area, period and settings).</>
+              : <>Could not copy automatically. Copy the address bar instead: it already holds this exact view.</>}
+          </div>
+        )}
       </header>
 
       <div className="workspace">
