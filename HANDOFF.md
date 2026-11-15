@@ -31,10 +31,11 @@ Online: page on Cloudflare Pages, data on Cloudflare R2 – follow `docs/DEPLOY_
 ## Where things stand
 - Done: worldwide pipeline (30° world blocks), harmonization with leave-one-year-out validation,
   static website in the FIRMS-style layout (map + side panel), CSV exports, share links, Cloudflare deployment (Pages + R2).
-- In progress when this was written: the first worldwide run (ingest → grid → harmonize). If the
-  site says "index.json could not be loaded", the run and `export-static` have not finished yet.
-- Not done yet: Phase 4 of the brief (README, validation results, limitations, 90-second demo
-  script) and Phase 5 (pitch-video prompts for Higgsfield; never spend credits without the owner's "yes").
+- Phase 4 (README, VALIDATION.md, LIMITATIONS.md, DEMO_SCRIPT.md, updated METHODS.md and
+  docs/DATA_DOWNLOAD.md) written on 15 Nov 2026. All numbers come from the 2022–2026 build;
+  rerun the checks in VALIDATION.md and re-read the demo numbers if the data changes.
+- Not done yet: Phase 5 (pitch-video prompts for Higgsfield; never spend credits without the
+  owner's "yes"). The FastAPI service (`api/`) is not updated for world blocks.
 
 ## Rules the owner set
 - Never invent data, endpoints or results; mark anything unverified as VERIFY.
