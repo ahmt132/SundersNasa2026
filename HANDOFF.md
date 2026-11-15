@@ -34,8 +34,8 @@ Online: page on Cloudflare Pages, data on Cloudflare R2 – follow `docs/DEPLOY_
 - Phase 4 (README, VALIDATION.md, LIMITATIONS.md, DEMO_SCRIPT.md, updated METHODS.md and
   docs/DATA_DOWNLOAD.md) written on 15 Nov 2026. All numbers come from the 2022–2026 build;
   rerun the checks in VALIDATION.md and re-read the demo numbers if the data changes.
-- Not done yet: Phase 5 (pitch-video prompts for Higgsfield; never spend credits without the
-  owner's "yes"). The FastAPI service (`api/`) is not updated for world blocks.
+- Phase 5 of the brief (pitch video) was canceled by the owner on 15 Nov 2026.
+- Not done yet: the optional FastAPI service (`api/`) is not updated for world blocks.
 
 ## Rules the owner set
 - Never invent data, endpoints or results; mark anything unverified as VERIFY.
