@@ -96,6 +96,7 @@ interface RegionIndex extends RegionInfo {
   files: {
     cells_h: { n: number }; cells_raw: { n: number };
     hall?: { n: number }; hy?: { n: number }; hm?: Record<string, { n: number }>;
+    am?: string[]; // 5-degree chunks with area files (see areaRows)
   };
   hot: Record<string, { n: number; bytes: number; last: string }>;
   last_day: string | null;
@@ -196,17 +197,34 @@ const index = () => load<Index>("index.json", "json");
 const seriesFile = (rid: string) => load<SeriesFile>(`r/${rid}/series.json`, "json");
 
 /** Read padded little-endian column blocks (see pipeline/export_static.py). */
-function columns(buf: ArrayBuffer, n: number, spec: [string, "u8" | "i8" | "u16" | "i32" | "u32" | "f32"][]) {
+function columns(buf: ArrayBuffer, n: number, spec: [string, "u8" | "i8" | "u16" | "i32" | "u32" | "f32"][], start = 0) {
   const size = { u8: 1, i8: 1, u16: 2, i32: 4, u32: 4, f32: 4 };
   const ctor = { u8: Uint8Array, i8: Int8Array, u16: Uint16Array, i32: Int32Array, u32: Uint32Array, f32: Float32Array };
   const out: Record<string, ArrayLike<number>> = {};
-  let off = 0;
+  let off = start;
   for (const [name, t] of spec) {
     out[name] = new ctor[t](buf, off, n);
     off += n * size[t];
     off += (4 - (off % 4)) % 4;
   }
   return out;
+}
+
+/** Byte length of a column-block section (each column padded to 4 bytes). */
+function sectionBytes(n: number, spec: [string, "u8" | "i8" | "u16" | "i32" | "u32" | "f32"][]) {
+  const size = { u8: 1, i8: 1, u16: 2, i32: 4, u32: 4, f32: 4 };
+  return spec.reduce((off, [, t]) => off + n * size[t] + ((4 - ((n * size[t]) % 4)) % 4), 0);
+}
+
+/** Two-section area file (export_static.export_areas): header nr, nh, then raw rows, then harmonized rows. */
+function areaFile(buf: ArrayBuffer, rawSpec: [string, "u8" | "u16" | "u32" | "f32"][]) {
+  const [nr, nh] = new Uint32Array(buf, 0, 2);
+  const hSpec: [string, "u16" | "f32"][] = [["m", "u16"], ["x", "u16"], ["y", "u16"], ["hc", "f32"], ["hd", "f32"]];
+  return {
+    nr, nh,
+    raw: columns(buf, nr, rawSpec, 8),
+    h: columns(buf, nh, hSpec, 8 + sectionBytes(nr, rawSpec)),
+  };
 }
 
 interface CellsH { m: ArrayLike<number>; ix: ArrayLike<number>; iy: ArrayLike<number>; hc: ArrayLike<number>; hd: ArrayLike<number>; n: number }
@@ -352,6 +370,82 @@ const SERIES_OUT = ["modis", "terra", "aqua", "viirs_snpp", "viirs_n20", "viirs_
 
 interface Wide { [col: string]: number | string | boolean | null }
 
+/**
+ * Sum a shape's values from the place-split area files: 1-degree tile sums for tiles whose 100
+ * cell centres are all inside the shape, 0.1-degree cells only for tiles on its edge. Gives the same
+ * numbers as summing every cell of the block, but reads only the part of the world the shape covers.
+ */
+async function areaSums(r: RegionIndex, shape: Shape, C: number, inside: (ix: number, iy: number) => boolean,
+  pos: Map<number, number>, sums: Sums): Promise<void> {
+  const [w, s, e, n] = shape.bbox;
+  const tx0 = Math.max(Math.floor(w + 180), Math.round(r.bbox[0] + 180)), tx1 = Math.min(Math.ceil(e + 180) - 1, Math.round(r.bbox[2] + 180) - 1);
+  const ty0 = Math.max(Math.floor(s + 90), Math.round(r.bbox[1] + 90)), ty1 = Math.min(Math.ceil(n + 90) - 1, Math.round(r.bbox[3] + 90) - 1);
+  if (tx0 > tx1 || ty0 > ty1) return;
+  const have = new Set(r.files.am);
+  const chunks: string[] = [];
+  for (let cx = Math.floor(tx0 / 5); cx <= Math.floor(tx1 / 5); cx++)
+    for (let cy = Math.floor(ty0 / 5); cy <= Math.floor(ty1 / 5); cy++) if (have.has(`${cx}_${cy}`)) chunks.push(`${cx}_${cy}`);
+  // 0 = no cell centre inside, 1 = all inside, 2 = some (edge tile)
+  const kind = new Map<number, number>();
+  const tileKind = (tx: number, ty: number) => {
+    const key = tx * 1000 + ty;
+    let k = kind.get(key);
+    if (k === undefined) {
+      let nIn = 0;
+      for (let i = 0; i < C; i++) for (let j = 0; j < C; j++) if (inside(tx * C + i, ty * C + j)) nIn++;
+      k = nIn === 0 ? 0 : nIn === C * C ? 1 : 2;
+      kind.set(key, k);
+    }
+    return k;
+  };
+  const edge = new Set<number>();
+  const rawSpec: [string, "u8" | "u16" | "u32"][] = [["m", "u16"], ["x", "u16"], ["y", "u16"], ["s", "u8"], ["n", "u32"], ["cd", "u32"]];
+  const within = (tx: number, ty: number) => tx >= tx0 && tx <= tx1 && ty >= ty0 && ty <= ty1;
+  await Promise.all(chunks.map(async (key) => {
+    const f = areaFile(await load<ArrayBuffer>(`r/${r.id}/am/${key}.bin`, "bin"), rawSpec);
+    const a = f.raw, b = f.h;
+    for (let i = 0; i < f.nr; i++) {
+      if (!within(a.x[i], a.y[i])) continue;
+      const k = tileKind(a.x[i], a.y[i]);
+      if (k === 2) { edge.add(a.x[i] * 1000 + a.y[i]); continue; }
+      if (k === 0) continue;
+      const p = pos.get(a.m[i]);
+      if (p === undefined) continue;
+      sums[p].raw[a.s[i]] += a.n[i];
+      sums[p].raw[6 + a.s[i]] += a.cd[i];
+    }
+    for (let i = 0; i < f.nh; i++) {
+      if (!within(b.x[i], b.y[i])) continue;
+      const k = tileKind(b.x[i], b.y[i]);
+      if (k === 2) { edge.add(b.x[i] * 1000 + b.y[i]); continue; }
+      if (k === 0) continue;
+      const p = pos.get(b.m[i]);
+      if (p === undefined) continue;
+      sums[p].hc += b.hc[i];
+      sums[p].hd += b.hd[i];
+    }
+  }));
+  const cellSpec: [string, "u8" | "u16" | "u32"][] = [["m", "u16"], ["x", "u16"], ["y", "u16"], ["s", "u8"], ["n", "u32"], ["cd", "u16"]];
+  await Promise.all([...edge].map(async (key) => {
+    const f = areaFile(await load<ArrayBuffer>(`r/${r.id}/ac/${Math.floor(key / 1000)}_${key % 1000}.bin`, "bin"), cellSpec);
+    const a = f.raw, b = f.h;
+    for (let i = 0; i < f.nr; i++) {
+      if (!inside(a.x[i], a.y[i])) continue;
+      const p = pos.get(a.m[i]);
+      if (p === undefined) continue;
+      sums[p].raw[a.s[i]] += a.n[i];
+      sums[p].raw[6 + a.s[i]] += a.cd[i];
+    }
+    for (let i = 0; i < f.nh; i++) {
+      if (!inside(b.x[i], b.y[i])) continue;
+      const p = pos.get(b.m[i]);
+      if (p === undefined) continue;
+      sums[p].hc += b.hc[i];
+      sums[p].hd += b.hd[i];
+    }
+  }));
+}
+
 /** Monthly rows (all metrics) for one region, either exact or summed from cells inside the shape. */
 async function regionRows(idx: Index, r: RegionIndex, shape: Shape | null): Promise<Wide[]> {
   const s = await seriesFile(r.id);
@@ -379,6 +473,10 @@ async function regionRows(idx: Index, r: RegionIndex, shape: Shape | null): Prom
   const pos = new Map<number, number>();
   rows.forEach((row, i) => pos.set(monthIndex(row.month as string), i));
   const sums = rows.map(() => ({ raw: new Float64Array(12), hc: 0, hd: 0 }));
+  if (r.files.am) {
+    await areaSums(r, shape, C, inside, pos, sums);
+    return fillRows(rows, sums);
+  }
   const [raw, h] = await Promise.all([cellsRaw(r), cellsH(r)]);
   for (let i = 0; i < raw.n; i++) {
     if (!inside(raw.ix[i], raw.iy[i])) continue;
@@ -394,6 +492,12 @@ async function regionRows(idx: Index, r: RegionIndex, shape: Shape | null): Prom
     sums[p].hc += h.hc[i];
     sums[p].hd += h.hd[i];
   }
+  return fillRows(rows, sums);
+}
+
+type Sums = { raw: Float64Array; hc: number; hd: number }[];
+
+function fillRows(rows: Wide[], sums: Sums): Wide[] {
   rows.forEach((row, i) => {
     SERIES_OUT.forEach((sname, si) => {
       if (row[`count_${sname}`] != null) row[`count_${sname}`] = sums[i].raw[si];

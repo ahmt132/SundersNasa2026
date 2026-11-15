@@ -23,6 +23,12 @@ N per file is in index.json. Layouts (column: type):
   t1m/<Y>.bin, hm/<Y>.bin   same layout as tiles1.bin / cells_h.bin, rows of year Y only
   t1y.bin, hy.bin           y:u16 x:u16 y:u16 hc:f32 hd:f32  (y = year - 2000; sums over the year's months)
   t1y_all.bin, hy_all.bin   same layout, y = 65535, sums over every month in the data
+  r/<region>/am/<cx>_<cy>.bin  custom areas: sums per 1 deg tile and month for one 5 deg chunk
+                            (cx = tx // 5, cy = ty // 5). Header nr:u32 nh:u32, then
+                            raw  m:u16 tx:u16 ty:u16 s:u8 n:u32 cd:u32  (nr rows)
+                            h    m:u16 tx:u16 ty:u16 hc:f32 hd:f32       (nh rows)
+  r/<region>/ac/<tx>_<ty>.bin  custom areas: the 0.1 deg cells of one 1 deg tile, same header, then
+                            cells_raw layout (nr rows) and cells_h layout (nh rows)
   recent/<d>.bin lat:i32 lon:i32 frp:f32 time:u16 sat:u8 conf:u8
 m = months since 2000-01, lat/lon in 1e-5 degrees, day = day of year - 1.
 Codes: series  0 modis 1 terra 2 aqua 3 viirs_snpp 4 viirs_n20 5 viirs_n21
@@ -301,3 +307,79 @@ def export_map(cfg: Config, out: str) -> None:
     con.close()
     (out_dir / "index.json").write_text(json.dumps(index, separators=(",", ":")), "utf-8")
     print(f"[export-map] wrote year-split map files ({total / 1e6:.1f} MB)")
+    export_areas(cfg, out)
+
+
+def _write_two(path: Path, raw: list[np.ndarray], h: list[np.ndarray], nr: int, nh: int) -> int:
+    """Header (nr, nh as u32) followed by two column-block sections."""
+    with open(path, "wb") as fh:
+        fh.write(np.array([nr, nh], np.uint32).tobytes())
+        for col in raw + h:
+            data = np.ascontiguousarray(col).tobytes()
+            fh.write(data)
+            pad = (-len(data)) % 4
+            if pad:
+                fh.write(b"\0" * pad)
+    return path.stat().st_size
+
+
+def export_areas(cfg: Config, out: str) -> None:
+    """Files for drawn areas and quick areas, split by place (see module docstring): a shape reads
+    1-degree tile sums for the tiles it covers completely and 0.1-degree cells only for the tiles on
+    its edge, instead of every cell of every 30-degree block it touches."""
+    hdir = cfg.processed / "harmonized"
+    out_dir = Path(out)
+    index = json.loads((out_dir / "index.json").read_text("utf-8"))
+    k = json.loads((hdir / "meta.json").read_text("utf-8"))["grid"]["cell_per_deg"]
+    con = duck_connect()
+    total, files = 0, 0
+    for entry in index["regions"]:
+        rid = entry["id"]
+        rdir = out_dir / "r" / rid
+        for d in ("am", "ac"):
+            shutil.rmtree(rdir / d, ignore_errors=True)
+            (rdir / d).mkdir(parents=True)
+        entry["files"]["am"] = []
+        cdir = hdir / "cells_monthly" / f"region={rid}"
+        rpath = cfg.processed / "monthly_cells" / f"region={rid}" / "data.parquet"
+        if not any(cdir.glob("*/*.parquet")) or not rpath.exists():
+            continue
+        r = con.execute(f"SELECT month, ix, iy, series, n, celldays FROM read_parquet('{rpath.as_posix()}')").df()
+        r["s"] = r["series"].map({v: i for i, v in enumerate(SERIES)}).astype(np.uint8)
+        h = con.execute(
+            f"SELECT month, ix, iy, h_count AS hc, h_celldays AS hd FROM read_parquet('{cdir.as_posix()}/*/*.parquet') "
+            "WHERE h_count > 0 OR h_celldays > 0").df()
+        for df in (r, h):
+            df["m"] = _month_index(df["month"])
+            df["tx"] = (df["ix"] // k).astype(np.uint16)
+            df["ty"] = (df["iy"] // k).astype(np.uint16)
+        # 0.1-degree cells per 1-degree tile
+        rg, hg = dict(tuple(r.groupby(["tx", "ty"]))), dict(tuple(h.groupby(["tx", "ty"])))
+        for key in set(rg) | set(hg):
+            a = rg.get(key, r.iloc[0:0]).sort_values(["m", "s", "iy", "ix"])
+            b = hg.get(key, h.iloc[0:0]).sort_values(["m", "iy", "ix"])
+            total += _write_two(rdir / "ac" / f"{key[0]}_{key[1]}.bin", [
+                a["m"].to_numpy(np.uint16), a["ix"].to_numpy(np.uint16), a["iy"].to_numpy(np.uint16),
+                a["s"].to_numpy(np.uint8), a["n"].to_numpy(np.uint32), a["celldays"].to_numpy(np.uint16)], [
+                b["m"].to_numpy(np.uint16), b["ix"].to_numpy(np.uint16), b["iy"].to_numpy(np.uint16),
+                b["hc"].fillna(0).to_numpy(np.float32), b["hd"].fillna(0).to_numpy(np.float32)], len(a), len(b))
+            files += 1
+        # 1-degree tile sums per month, grouped into 5-degree chunks
+        rt = r.groupby(["m", "tx", "ty", "s"], as_index=False)[["n", "celldays"]].sum()
+        ht = h.groupby(["m", "tx", "ty"], as_index=False)[["hc", "hd"]].sum()
+        for df in (rt, ht):
+            df["cx"], df["cy"] = df["tx"] // 5, df["ty"] // 5
+        rc, hc = dict(tuple(rt.groupby(["cx", "cy"]))), dict(tuple(ht.groupby(["cx", "cy"])))
+        for key in sorted(set(rc) | set(hc)):
+            a = rc.get(key, rt.iloc[0:0]).sort_values(["m", "s", "ty", "tx"])
+            b = hc.get(key, ht.iloc[0:0]).sort_values(["m", "ty", "tx"])
+            total += _write_two(rdir / "am" / f"{key[0]}_{key[1]}.bin", [
+                a["m"].to_numpy(np.uint16), a["tx"].to_numpy(np.uint16), a["ty"].to_numpy(np.uint16),
+                a["s"].to_numpy(np.uint8), a["n"].to_numpy(np.uint32), a["celldays"].to_numpy(np.uint32)], [
+                b["m"].to_numpy(np.uint16), b["tx"].to_numpy(np.uint16), b["ty"].to_numpy(np.uint16),
+                b["hc"].to_numpy(np.float32), b["hd"].to_numpy(np.float32)], len(a), len(b))
+            entry["files"]["am"].append(f"{int(key[0])}_{int(key[1])}")
+            files += 1
+    con.close()
+    (out_dir / "index.json").write_text(json.dumps(index, separators=(",", ":")), "utf-8")
+    print(f"[export-areas] wrote {files:,} area files ({total / 1e6:.1f} MB)")
