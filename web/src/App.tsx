@@ -20,7 +20,9 @@ const CONTACTS = ["a.sungur2008@gmail.com", "alexcemanders32@gmail.com"];
 const TEAM_PAGE = "https://www.spaceappschallenge.org/2026/find-a-team/sunders/";
 
 const WINDOWS = [{ days: 1, label: "24 HRS" }, { days: 3, label: "3 DAYS" }, { days: 7, label: "7 DAYS" }] as const;
-const MAX_RANGE_DAYS = 92; // individual detections for longer periods are too many to draw; the calendar covers those
+// At most 15 days of individual detections on the map: such a window never covers a whole month, so
+// only those days are read from the month files (fast), and the number of dots stays drawable.
+const MAX_RANGE_DAYS = 15;
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 /** YYYY-MM shifted by n months. */
 const addMonths = (ym: string, n: number) => {
