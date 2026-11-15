@@ -136,6 +136,18 @@ input { width: 100%; font-family: var(--mono); }
 .intro-links .link { padding: 0; font-size: 14px; }
 .draw-label { margin-bottom: -6px; }
 
+.time-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.round {
+  width: 54px; height: 54px; min-height: 0; border-radius: 50%; padding: 0; font-size: 12px; font-weight: 500; letter-spacing: 0.02em;
+  background: #2a3152; border: 1px solid #3d4775; color: #e9e9e9; display: inline-flex; align-items: center; justify-content: center;
+}
+.round[aria-pressed="true"] { background: #3a5bd9; border-color: #6b86ff; color: #fff; }
+.round.cal { position: relative; cursor: pointer; }
+.round.cal input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; min-height: 0; }
+.round.cal:focus-within { outline: 2px solid #fff; outline-offset: 2px; }
+.time-text { display: flex; flex-direction: column; font-size: 12px; color: var(--ink2); margin-left: 4px; }
+.time-text strong { color: var(--ink); font-size: 14px; }
+
 .layers { margin: 0 -12px; border-top: 1px solid #0d1122; border-bottom: 1px solid #0d1122; background: var(--panel-2); padding: 4px 0; }
 .layer-row { display: flex; align-items: center; padding: 0 10px 0 4px; }
 .layer-toggle { flex: 1; display: flex; align-items: center; gap: 12px; background: none; border: 0; text-align: left; padding: 7px 8px; white-space: normal; }
@@ -259,14 +271,3 @@ input { width: 100%; font-family: var(--mono); }
 
 /* ---------- team banner (About) */
 .team-banner { display: block; width: 100%; height: auto; border-radius: 4px; margin: 0 0 12px; box-shadow: 0 0 18px rgba(80, 110, 255, 0.35); }
-
-/* ---------- map dates and period */
-.window-line { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 14px; color: var(--ink2); }
-.window-line strong { color: var(--ink); }
-.window-line .link, .self-start { padding: 0; align-self: flex-start; }
-.tip { color: var(--ink3) !important; }
-.tip-action { color: #9cb8ff !important; }
-.map-hint {
-  position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 3; background: rgba(20, 25, 60, 0.94);
-  border: 1px solid #6b86ff; border-radius: 4px; padding: 8px 14px; font-size: 14px; max-width: min(560px, calc(100% - 32px)); text-align: center;
-}

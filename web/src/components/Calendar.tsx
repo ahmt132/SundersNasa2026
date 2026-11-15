@@ -18,15 +18,11 @@ interface Props {
   footer: string;
   onMode: (m: "value" | "anomaly") => void;
   onScale: (s: "log" | "quantile") => void;
-  /** The month whose fires the map shows now (YYYY-MM), outlined on the calendar. */
-  shownMonth?: string | null;
-  /** Click (or Enter) on a month: show its fires on the map. */
-  onPickMonth?: (month: string) => void;
 }
 
 const LEFT = 42, TOP = 20, GAP = 3;
 
-function MonthTip({ m, med, clickable }: { m: MonthRow; med: number | null; clickable: boolean }) {
+function MonthTip({ m, med }: { m: MonthRow; med: number | null }) {
   const h = m.harmonized;
   const departure = h != null && med != null && med > 0 ? ((h - med) / med) * 100 : null;
   return (
@@ -48,12 +44,11 @@ function MonthTip({ m, med, clickable }: { m: MonthRow; med: number | null; clic
       <div className="tip-note">{eraLabel(m)}</div>
       {m.partial && <div className="tip-note">Partial month: {m.days_observed} of {m.days_in_month} days observed</div>}
       {h == null && <div className="tip-note">No conversion could be fitted for this month</div>}
-      {clickable && <div className="tip-note tip-action">Click to show this month&apos;s fires on the map</div>}
     </>
   );
 }
 
-export function Calendar({ months, mode, scale, unit, footer, onMode, onScale, shownMonth, onPickMonth }: Props) {
+export function Calendar({ months, mode, scale, unit, footer, onMode, onScale }: Props) {
   const uid = useId().replace(/:/g, "");
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [bodyRef, width] = useWidth<HTMLDivElement>();
@@ -108,17 +103,12 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale, s
     if (!active) return null;
     const m = cell(active.yi, active.mi);
     if (!m) return null;
-    return { x: LEFT + active.mi * cw + cw / 2, y: TOP + active.yi * ROW, content: <MonthTip m={m} med={medians[m.moy]} clickable={!!onPickMonth} /> };
+    return { x: LEFT + active.mi * cw + cw / 2, y: TOP + active.yi * ROW, content: <MonthTip m={m} med={medians[m.moy]} /> };
   })();
 
   const onKey = (e: KeyboardEvent) => {
     const step: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
     if (e.key === "Escape") return setActive(null);
-    if ((e.key === "Enter" || e.key === " ") && active) {
-      const m = cell(active.yi, active.mi);
-      if (m && onPickMonth) { e.preventDefault(); onPickMonth(m.month); }
-      return;
-    }
     if (!step[e.key] || !years.length) return;
     e.preventDefault();
     const cur = active ?? { yi: years.length - 1, mi: 0 };
@@ -136,15 +126,6 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale, s
     if (mi < 0 || mi > 11 || yi < 0 || yi >= years.length || !cell(yi, mi)) return setActive(null);
     if (!active || active.yi !== yi || active.mi !== mi) setActive({ yi, mi });
   };
-
-  const onClick = (e: MouseEvent<SVGSVGElement>) => {
-    const box = e.currentTarget.getBoundingClientRect();
-    const mi = Math.floor((e.clientX - box.left - LEFT) / cw);
-    const yi = Math.floor((e.clientY - box.top - TOP) / ROW);
-    const m = mi >= 0 && mi <= 11 && yi >= 0 && yi < years.length ? cell(yi, mi) : undefined;
-    if (m && onPickMonth) onPickMonth(m.month);
-  };
-  const shown = shownMonth ? months.find((m) => m.month === shownMonth) : undefined;
 
   // ---- legend geometry
   const ly = TOP + gridH + 14;
@@ -185,8 +166,7 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale, s
         aria-label={`${title}. ${years.length} years by 12 months. Use the arrow keys to read each month.`}
       >
         {width > 0 && (
-          <svg ref={svgRef} width={width} height={height} role="img" aria-hidden="true" onMouseMove={onMove} onMouseLeave={() => setActive(null)}
-            onClick={onClick} style={onPickMonth ? { cursor: "pointer" } : undefined}>
+          <svg ref={svgRef} width={width} height={height} role="img" aria-hidden="true" onMouseMove={onMove} onMouseLeave={() => setActive(null)}>
             <defs>
               {/* Two-tone hatches stay visible on both the darkest and the brightest cells. */}
               <pattern id={`${uid}-partial`} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -237,13 +217,6 @@ export function Calendar({ months, mode, scale, unit, footer, onMode, onScale, s
                 })}
               </g>
             ))}
-            {shown && (() => {
-              const yi = years.indexOf(shown.year), mi = shown.moy - 1;
-              return (
-                <rect x={LEFT + mi * cw - 2.5} y={TOP + yi * ROW - 2.5} width={cw - GAP + 5} height={ROW - GAP + 5} rx={5}
-                  fill="none" stroke="#6b86ff" strokeWidth={2.5} pointerEvents="none" />
-              );
-            })()}
             {active && cell(active.yi, active.mi) && (
               <rect x={LEFT + active.mi * cw - 1.5} y={TOP + active.yi * ROW - 1.5} width={cw - GAP + 3} height={ROW - GAP + 3} rx={4}
                 fill="none" stroke={T.ink} strokeWidth={2} pointerEvents="none" />
