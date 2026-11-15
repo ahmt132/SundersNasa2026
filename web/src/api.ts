@@ -138,12 +138,56 @@ type SeriesFile = Record<string, (string | number | boolean | null)[]>;
 const DATA = String(import.meta.env.VITE_DATA_URL || `${import.meta.env.BASE_URL}data`).replace(/\/+$/, "");
 const cache = new Map<string, Promise<unknown>>();
 
+// ---- download progress (for the loading screen)
+// Bytes are counted as they arrive. Content-Length is the size on the wire; when the server
+// compresses a file the decoded stream is longer, so each file's count is capped at its length.
+export interface LoadProgress { received: number; expected: number; active: number }
+const prog = { received: 0, expected: 0, active: 0 };
+const progListeners = new Set<(p: LoadProgress) => void>();
+const emitProgress = () => progListeners.forEach((f) => f({ ...prog }));
+export function onLoadProgress(f: (p: LoadProgress) => void): () => void {
+  progListeners.add(f);
+  f({ ...prog });
+  return () => void progListeners.delete(f);
+}
+
+async function readCounted(r: Response): Promise<ArrayBuffer> {
+  const len = Number(r.headers.get("content-length")) || 0;
+  prog.active++;
+  prog.expected += len;
+  emitProgress();
+  let counted = 0;
+  try {
+    if (!r.body) return await r.arrayBuffer();
+    const reader = r.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.length;
+      const add = (len ? Math.min(total, len) : 0) - counted;
+      if (add > 0) { counted += add; prog.received += add; emitProgress(); }
+    }
+    const out = new Uint8Array(total);
+    let o = 0;
+    for (const c of chunks) { out.set(c, o); o += c.length; }
+    return out.buffer;
+  } finally {
+    prog.received += len - counted; // finished (or failed): the file no longer counts as pending
+    prog.active--;
+    emitProgress();
+  }
+}
+
 function load<T>(path: string, kind: "json" | "bin"): Promise<T> {
   if (!cache.has(path)) {
     const p = fetch(`${DATA}/${path}`)
-      .then((r) => {
+      .then(async (r) => {
         if (!r.ok) throw new ApiError(r.status, "missing_file", `Data file ${path} could not be loaded (${r.status}).`);
-        return kind === "json" ? r.json() : r.arrayBuffer();
+        const buf = await readCounted(r);
+        return kind === "json" ? JSON.parse(new TextDecoder().decode(buf)) : buf;
       })
       .catch((e) => {
         cache.delete(path);

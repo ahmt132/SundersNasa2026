@@ -6,9 +6,33 @@
     <meta name="color-scheme" content="dark" />
     <title>Burning calendar · Team Sunders</title>
     <link rel="icon" type="image/png" href="./favicon.png" />
-    <meta name="theme-color" content="#0b0f24" />
+    <meta name="theme-color" content="#000000" />
+    <link rel="preload" as="image" href="./brand/sunders-banner.jpg" />
+    <!-- Loading screen: plain HTML and CSS so it shows before the app's JavaScript has arrived.
+         src/components/BootScreen.tsx drives the progress bar and removes it once the map is drawn. -->
+    <style>
+      #boot { position: fixed; inset: 0; z-index: 1000; background: #000; color: #f3efe8; display: flex;
+        flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 24px;
+        font-family: "IBM Plex Sans", system-ui, sans-serif; transition: opacity 0.45s ease; }
+      #boot.done { opacity: 0; pointer-events: none; }
+      #boot img { width: min(520px, 88vw); height: auto; border-radius: 6px; box-shadow: 0 0 40px rgba(70, 100, 255, 0.35); }
+      #boot .boot-title { font-size: 22px; font-weight: 600; letter-spacing: 0.01em; margin-top: 6px; text-align: center; }
+      #boot .boot-sub { font-size: 14px; color: #b9b7cc; text-align: center; margin-top: -10px; }
+      #boot .boot-bar { width: min(420px, 80vw); height: 6px; border-radius: 3px; background: #1d2240; overflow: hidden; }
+      #boot .boot-fill { height: 100%; width: 3%; border-radius: 3px; background: linear-gradient(90deg, #d9641f, #ff9a5c);
+        transition: width 0.25s ease; }
+      #boot .boot-status { font: 400 13px "IBM Plex Mono", ui-monospace, monospace; color: #9896ae; min-height: 1.4em; text-align: center; }
+      @media (prefers-reduced-motion: reduce) { #boot, #boot .boot-fill { transition: none; } }
+    </style>
   </head>
   <body>
+    <div id="boot" role="status" aria-live="polite">
+      <img src="./brand/sunders-banner.jpg" alt="Team Sunders" width="648" height="406" />
+      <div class="boot-title">Burning Calendar</div>
+      <div class="boot-sub">A NASA Space Apps Challenge 2026 project by team Sunders</div>
+      <div class="boot-bar" aria-hidden="true"><div class="boot-fill"></div></div>
+      <div class="boot-status">Starting…</div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -109,6 +109,9 @@ interface Props {
   onView: (view: View) => void;
   onClear: () => void;
   finishRef: { current: () => void };
+  /** While true, report once the map has drawn the current points and finished loading (loading screen). */
+  awaitDrawn?: boolean;
+  onDrawn?: () => void;
 }
 
 export function MapView(p: Props) {
@@ -354,6 +357,26 @@ export function MapView(p: Props) {
       geometry: { type: "Point", coordinates: [q.lon, q.lat] },
     }))));
   }, [ready, p.points]);
+
+  // Report once the points set by the effect above are processed and on screen. This waits for
+  // the "points" source itself, not for the whole map: map.loaded()/"idle" also wait on hidden
+  // raster sources and do not fire reliably here. Two animation frames = drawn at least once.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !p.awaitDrawn) return;
+    let raf = 0, cancelled = false;
+    const done = () => {
+      raf = requestAnimationFrame(() => { raf = requestAnimationFrame(() => !cancelled && props.current.onDrawn?.()); });
+    };
+    const onData = (e: { sourceId?: string; isSourceLoaded?: boolean }) => {
+      if (e.sourceId === "points" && e.isSourceLoaded) { map.off("sourcedata", onData); done(); }
+    };
+    let loaded = false;
+    try { loaded = map.isSourceLoaded("points"); } catch { loaded = false; }
+    if (loaded) done();
+    else map.on("sourcedata", onData);
+    return () => { cancelled = true; cancelAnimationFrame(raf); map.off("sourcedata", onData); };
+  }, [ready, p.awaitDrawn, p.points]);
 
   useEffect(() => {
     const map = mapRef.current;

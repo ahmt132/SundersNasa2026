@@ -3,6 +3,7 @@ import {
   ApiError, DETAIL_ZOOM, calendarExport, fetchCalendar, fetchCells, fetchPoints, fetchRegions, hotspotsExport, saveBlob, summarize,
   type CellsResponse, type ExportFormat, type Kpis, type Meta, type MonthRow, type PointsResult, type Query, type RegionsResponse, type View,
 } from "./api";
+import { BootScreen } from "./components/BootScreen";
 import { Calendar } from "./components/Calendar";
 import { AnnualTotals, SeasonalProfile, SensorPanel } from "./components/Charts";
 import { KpiStrip } from "./components/KpiStrip";
@@ -140,6 +141,14 @@ export default function App() {
   const [formError, setFormError] = useState("");
   const [modal, setModal] = useState<null | "methods" | "about">(null);
   const finishRef = useRef<() => void>(() => undefined);
+  const [pointsReady, setPointsReady] = useState(false);
+  const [drawn, setDrawn] = useState(false);
+  const [bootTimedOut, setBootTimedOut] = useState(false);
+  useEffect(() => {
+    // Never keep the loading screen up forever (for example if a map tile server is very slow).
+    const t = window.setTimeout(() => setBootTimedOut(true), 30_000);
+    return () => window.clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     fetchRegions()
@@ -216,10 +225,19 @@ export default function App() {
   useEffect(() => {
     if (!windowEnd || !windowStart) return;
     let live = true;
-    fetchPoints(windowStart, windowEnd, mapView).then((r) => live && setPoints(r)).catch(() => undefined);
+    fetchPoints(windowStart, windowEnd, mapView)
+      .then((r) => { if (live) { setPoints(r); setPointsReady(true); } })
+      .catch(() => live && setPointsReady(true));
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [windowStart, windowEnd, mapView?.bounds.map((v) => v.toFixed(1)).join(",")]);
+
+  const booting = !drawn && !bootTimedOut && !error;
+  const bootStage = !regions ? "Reading the data index"
+    : cells == null ? "Loading the world fire grid"
+    : !pointsReady ? `Loading fire detections, ${windowDays} days`
+    : !data ? "Preparing the burning calendar"
+    : `Drawing ${points.total.toLocaleString("en-US")} fire detections`;
 
   const range = regions?.data_range;
   const from = view.from ?? range?.start ?? "2022-11";
@@ -287,6 +305,7 @@ export default function App() {
 
   return (
     <div className={`app${panelOpen ? "" : " panel-closed"}${wide ? " wide" : ""}`}>
+      <BootScreen stage={bootStage} done={!booting} />
       <header className="topbar">
         <button type="button" className="icon-btn" aria-label={panelOpen ? "Hide side panel" : "Show side panel"} aria-expanded={panelOpen}
           onClick={() => setPanelOpen((v) => !v)}><Icon d={ICONS.menu} size={22} /></button>
@@ -311,6 +330,7 @@ export default function App() {
           onDrawEnd={() => setDrawMode(null)} onDrawCount={setNVerts} onSelect={(sel) => setView({ sel })}
           onPickPoint={(lat, lon) => setPoint((p) => ({ ...p, lat: lat.toFixed(4), lon: lon.toFixed(4) }))}
           onCursor={setCursor} onView={setMapView} onClear={clearArea} finishRef={finishRef}
+          awaitDrawn={booting && pointsReady && cells != null} onDrawn={() => setDrawn(true)}
         />
 
         <div className="infobar" aria-live="off" style={{ left: `calc((100% - ${panelWidth ? panelWidth + 12 : 0}px) / 2)` }}>
@@ -514,7 +534,7 @@ export default function App() {
       )}
       {modal === "about" && (
         <Modal title="Data & credits" onClose={() => setModal(null)}>
-          <img className="team-banner" src="./brand/sunders-banner.png" alt="Team Sunders banner" width={648} height={406} />
+          <img className="team-banner" src="./brand/sunders-banner.jpg" alt="Team Sunders banner" width={648} height={406} />
           <p>Made by team <strong>Sunders</strong> for the NASA Space Apps Challenge 2026.</p>
           <p>{regions?.citation}</p>
           <p>We acknowledge the use of data and imagery from LANCE FIRMS operated by NASA&apos;s Goddard Space Flight Center Earth Science Data and Information System (ESDIS) with funding provided by NASA Headquarters.</p>
