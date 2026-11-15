@@ -325,7 +325,7 @@ export default function App() {
         <button type="button" className="icon-btn" aria-label={controlsOpen ? "Hide controls" : "Show controls"} aria-expanded={controlsOpen}
           onClick={() => setControlsOpen((v) => !v)}><Icon d={ICONS.menu} size={22} /></button>
         <div className="brand">
-          <img className="mark" src="./brand/planet-logo-v2.png" alt="" width={38} height={38} />
+          <img className="mark" src="./brand/planet-logo-v3.png" alt="" width={38} height={38} />
           <div>
             <div className="brand-name">Harmonic Heat</div>
             <div className="brand-sub">NASA Space Apps Challenge 2026 · team Sunders</div>
@@ -569,7 +569,7 @@ export default function App() {
 
       {modal === "about" && (
         <Modal title="About this project" onClose={() => setModal(null)}>
-          <img className="team-banner" src="./brand/sunders-banner.jpg" alt="Team Sunders banner" width={648} height={406} />
+          <img className="team-banner" src="./brand/sunders-banner-v2.jpg" alt="Team Sunders banner" width={1100} height={614} />
           <p><strong>Harmonic Heat</strong> was built by team <strong>Sunders</strong> for the <strong>NASA Space Apps Challenge 2026</strong>, for the challenge <em>Harmonization of MODIS and VIIRS Hot Spots</em>.</p>
           <p>NASA satellites have watched fires from space since 2000. The older MODIS instruments (on Terra and Aqua) see the Earth in 1 km pixels; the newer VIIRS instruments (on S-NPP, NOAA-20 and NOAA-21) use 375 m pixels and report about four times more hotspots for the same fires. Put on one chart, the two records disagree, and the change of satellite looks like a change in burning.</p>
           <p>This site converts VIIRS detections into MODIS units, separately for every part of the world and season, and checks the conversion on years it was not trained on. The result is one consistent fire record that can continue on VIIRS after MODIS retires. Choose any area to see its burning calendar: when fires happen, and whether a month was unusual.</p>
