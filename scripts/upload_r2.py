@@ -20,6 +20,7 @@ from pathlib import Path
 import boto3
 from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "web" / "public" / "data"
@@ -71,10 +72,15 @@ def main() -> None:
 
     if a.cors is not None:
         origins = sorted({o.rstrip("/") for o in a.cors} | {"http://localhost:5173"})
-        s3.put_bucket_cors(Bucket=bucket, CORSConfiguration={"CORSRules": [{
-            "AllowedOrigins": origins, "AllowedMethods": ["GET", "HEAD"],
-            "AllowedHeaders": ["*"], "MaxAgeSeconds": 86400}]})
-        print("CORS allows:", ", ".join(origins))
+        try:
+            s3.put_bucket_cors(Bucket=bucket, CORSConfiguration={"CORSRules": [{
+                "AllowedOrigins": origins, "AllowedMethods": ["GET", "HEAD"],
+                "AllowedHeaders": ["*"], "MaxAgeSeconds": 86400}]})
+            print("CORS allows:", ", ".join(origins))
+        except ClientError as e:
+            # An "Object Read & Write" token may not change bucket settings; the upload still works.
+            print(f"Could not set CORS ({e.response['Error'].get('Code')}). Set it in the dashboard instead: "
+                  "bucket -> Settings -> CORS Policy (docs/DEPLOY_CLOUDFLARE.md). Continuing with the upload.")
 
     remote: dict[str, tuple[int, str]] = {}
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):

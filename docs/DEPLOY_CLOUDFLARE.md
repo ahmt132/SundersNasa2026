@@ -24,17 +24,19 @@ Below, `example.org` is your domain. The page will be at `https://example.org` a
 4. R2 overview → **Manage API tokens** → **Create API token** → permission *Object Read & Write*,
    only this bucket. Keep the window open: you need the Access Key ID, the Secret Access Key and
    your Account ID (shown on the R2 overview page).
-5. In PowerShell, in the project folder (the keys stay in this window only; never put them in a file
-   that goes to GitHub):
+5. Bucket → **Settings** → **CORS Policy** → **Add**, paste and save:
    ```
-   $env:R2_ACCOUNT_ID="..."; $env:R2_ACCESS_KEY_ID="..."; $env:R2_SECRET_ACCESS_KEY="..."
-   $env:R2_BUCKET="burning-calendar-data"
-   .\scripts\publish_data.ps1 -Origins https://example.org
+   [{"AllowedOrigins": ["*"], "AllowedMethods": ["GET", "HEAD"], "AllowedHeaders": ["*"], "MaxAgeSeconds": 86400}]
    ```
-   This writes the data (`export-static`), uploads it and sets the CORS rule that lets
-   `example.org` (and `localhost:5173`) read it. The first upload sends 4.8 GB; later runs send
-   only files that changed. Add `-SkipExport` to upload what is already in `web/public/data`.
-6. Check: `https://data.example.org/index.json` opens in the browser.
+   (the data is public anyway; an *Object Read & Write* token is not allowed to set this itself).
+6. In PowerShell, in the project folder:
+   ```
+   powershell -ExecutionPolicy Bypass -File .\scripts\publish_data.ps1 -SkipExport
+   ```
+   It asks for the Account ID, bucket name, Access Key ID and Secret Access Key (typed only into
+   that window, never saved). Without `-SkipExport` it first rebuilds the data (`export-static`).
+   The first upload sends ~5 GB; later runs send only files that changed.
+7. Check: `https://data.example.org/index.json` opens in the browser.
 
 ## 3. Page → Cloudflare Pages (once; afterwards every `git push` redeploys)
 1. Dashboard → **Workers & Pages** → **Create** → **Pages** → **Connect to Git** → GitHub →
