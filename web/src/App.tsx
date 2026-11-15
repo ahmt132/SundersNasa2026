@@ -19,7 +19,7 @@ interface Data {
 const CONTACTS = ["a.sungur2008@gmail.com", "alexcemanders32@gmail.com"];
 const TEAM_PAGE = "https://www.spaceappschallenge.org/2026/find-a-team/sunders/";
 
-const WINDOWS = [{ days: 1, label: "24 hours" }, { days: 3, label: "3 days" }, { days: 7, label: "7 days" }] as const;
+const WINDOWS = [{ days: 1, label: "24 HRS" }, { days: 3, label: "3 DAYS" }, { days: 7, label: "7 DAYS" }] as const;
 const MAX_RANGE_DAYS = 92; // individual detections for longer periods are too many to draw; the calendar covers those
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 /** YYYY-MM shifted by n months. */
@@ -45,6 +45,7 @@ const ICONS = {
   down: "M6 9l6 6 6-6",
   up: "M6 15l6-6 6 6",
   info: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 16v-4M12 8h.01",
+  cal: "M3 5h18v16H3zM16 3v4M8 3v4M3 10h18",
   plus: "M12 5v14M5 12h14",
   minus: "M5 12h14",
 };
@@ -145,8 +146,6 @@ export default function App() {
   const [rangeOpen, setRangeOpen] = useState(false);
   const [rangeDraft, setRangeDraft] = useState({ from: "", to: "" });
   const [rangeError, setRangeError] = useState("");
-  const [customPeriod, setCustomPeriod] = useState(false);
-  const fitAreaRef = useRef<() => void>(() => undefined);
   const [drawMode, setDrawMode] = useState<DrawMode>(null);
   const [nVerts, setNVerts] = useState(0);
   const [cursor, setCursor] = useState<{ lat: number; lon: number } | null>(null);
@@ -255,30 +254,6 @@ export default function App() {
   const from = view.from ?? range?.start ?? "2000-11";
   const to = view.to ?? range?.end ?? "2026-11";
   const last12 = range ? addMonths(range.end, -11) : null;
-  // ---- dates for the map: a whole month (from a calendar click or the month menu)
-  const monthWindow = (ym: string): [string, string] => {
-    const s0 = `${ym}-01`, e0 = addDays(`${addMonths(ym, 1)}-01`, -1);
-    return [firstDay && s0 < firstDay ? firstDay : s0, lastDay && e0 > lastDay ? lastDay : e0];
-  };
-  const shownMonth = (() => {
-    if (!windowStart || !windowEnd || !firstDay) return null;
-    const ym = windowStart.slice(0, 7);
-    const [a, b] = monthWindow(ym);
-    return a === windowStart && b === windowEnd ? ym : null;
-  })();
-  const monthList = range ? Array.from({ length: (Number(range.end.slice(0, 4)) - Number(range.start.slice(0, 4))) * 12
-    + Number(range.end.slice(5)) - Number(range.start.slice(5)) + 1 }, (_, i) => addMonths(range.end, -i)) : [];
-  const windowText = !windowStart || !windowEnd ? "–"
-    : shownMonth ? monthLabel(shownMonth)
-    : windowStart === windowEnd ? windowEnd : `${windowStart} → ${windowEnd}`;
-  // ---- analysis period: whole years
-  const yearList = range ? Array.from({ length: Number(range.end.slice(0, 4)) - Number(range.start.slice(0, 4)) + 1 },
-    (_, i) => Number(range.start.slice(0, 4)) + i) : [];
-  const yearSpan = (y: number): [string | null, string | null] => {
-    if (!range) return [null, null];
-    const a = `${y}-01` < range.start ? range.start : `${y}-01`, b = `${y}-12` > range.end ? range.end : `${y}-12`;
-    return [a === range.start ? null : a, b === range.end ? null : b];
-  };
   const unitShort = view.metric === "count" ? "hotspots" : "active cell-days";
   const selLabel = view.sel && regions ? selectionLabel(view.sel, regions.regions) : "";
   const footer = data
@@ -340,18 +315,6 @@ export default function App() {
     setFormError("");
     setDrawMode((cur) => (cur === m ? null : m));
   };
-  const pickMonth = (ym: string) => {
-    const [a, b] = monthWindow(ym);
-    setWindowStart(a);
-    setWindowEnd(b);
-    setRangeOpen(false);
-    setOpen((o) => ({ ...o, map: true }));
-    if (!isWorld) fitAreaRef.current();
-    if (window.matchMedia("(max-width: 860px)").matches) document.querySelector(".map-area")?.scrollIntoView({ behavior: "smooth" });
-    flash(isWorld
-      ? `The map now shows ${monthLabel(ym)}. Zoom in to a region (or choose an area) to see those fires.`
-      : `The map now shows the fires of ${monthLabel(ym)} in ${selLabel}.`);
-  };
   const period = data && data.months.length
     ? `${monthLabel(data.months[0].month)} – ${monthLabel(data.months[data.months.length - 1].month)}` : "";
 
@@ -393,27 +356,25 @@ export default function App() {
             )}
 
             <Section id="map" title="Fires on the map" open={open.map} onToggle={toggle}>
-              <div className="label">Show fires from</div>
-              <div className="seg" role="group" aria-label="Days of fire detections shown on the map">
+              <div className="time-row" role="group" aria-label="Days of detections shown on the map">
                 {WINDOWS.map((w) => (
-                  <button key={w.days} type="button" aria-pressed={!shownMonth && windowEnd === lastDay && windowDays === w.days}
-                    onClick={() => preset(w.days)}>Last {w.label}</button>
+                  <button key={w.days} type="button" className="round"
+                    aria-pressed={!rangeOpen && windowEnd === lastDay && windowDays === w.days}
+                    onClick={() => preset(w.days)}>{w.label}</button>
                 ))}
-              </div>
-              <label className="field">
-                <span>…or a whole month</span>
-                <select value={shownMonth ?? ""} onChange={(e) => e.target.value && pickMonth(e.target.value)}>
-                  <option value="">Choose a month</option>
-                  {monthList.map((ym) => <option key={ym} value={ym}>{monthLabel(ym)}</option>)}
-                </select>
-              </label>
-              <div className="window-line">
-                <span>Showing: <strong>{windowText}</strong>{windowEnd === lastDay && !shownMonth ? " (latest)" : ""}</span>
-                <button type="button" className="link" aria-expanded={rangeOpen} onClick={() => {
-                  setRangeDraft({ from: windowStart ?? "", to: windowEnd ?? "" });
-                  setRangeError("");
-                  setRangeOpen((o) => !o);
-                }}>Custom dates</button>
+                <button type="button" className="round cal" aria-pressed={rangeOpen || (windowEnd !== lastDay || !WINDOWS.some((w) => w.days === windowDays))}
+                  aria-expanded={rangeOpen} title="Choose two dates" aria-label="Choose two dates"
+                  onClick={() => {
+                    setRangeDraft({ from: windowStart ?? "", to: windowEnd ?? "" });
+                    setRangeError("");
+                    setRangeOpen((o) => !o);
+                  }}>
+                  <Icon d={ICONS.cal} />
+                </button>
+                <div className="time-text">
+                  <strong>{windowDays} {windowDays === 1 ? "DAY" : "DAYS"}</strong>
+                  <span>{windowStart === windowEnd ? windowEnd : `${windowStart} → ${windowEnd}`}{windowEnd === lastDay ? " (latest)" : ""}</span>
+                </div>
               </div>
               {rangeOpen && (
                 <form className="range-form" onSubmit={applyRange}>
@@ -427,11 +388,10 @@ export default function App() {
                   </label>
                   <button type="submit" className="primary">Show</button>
                   <button type="button" onClick={() => setRangeOpen(false)}>Cancel</button>
-                  <p className="small">Any two dates between {firstDay} and {lastDay}, up to {MAX_RANGE_DAYS} days.</p>
+                  <p className="small">Any two dates between {firstDay} and {lastDay}, up to {MAX_RANGE_DAYS} days. Dates before the last 7 days are drawn for the area on screen, so zoom in to a region first.</p>
                   {rangeError && <p className="error" role="alert">{rangeError}</p>}
                 </form>
               )}
-              <p className="small tip">Tip: click any month in the burning calendar to show its fires on the map.</p>
               <div className="layers">
                 <LayerRow on={layers.viirs} color={POINT_COLORS.viirs} kind="dot" label={`VIIRS detections · ${fmt(nViirs)}`}
                   hint="Each dot is one VIIRS 375 m detection (S-NPP, NOAA-20, NOAA-21; nominal or high confidence). Click a dot for details."
@@ -458,6 +418,7 @@ export default function App() {
                 {points.stride > 1 && (
                   <p className="small">{fmt(points.total)} detections in view: the map draws every {points.stride}th one. Zoom in to see all of them.</p>
                 )}
+                {points.zoomIn && <p className="small">Detections before the last 7 days are shown for the area on screen: zoom in to a region (about 60° across or less).</p>}
               </div>
             </Section>
 
@@ -500,26 +461,14 @@ export default function App() {
             <Section id="period" title="Analysis period & downloads" open={open.period} onToggle={toggle}>
               {range && (
                 <>
-                  <div className="label">Period for the calendar, charts and coloured squares</div>
-                  <div className="seg" role="group" aria-label="Analysis period">
+                  <div className="row">
+                    <MonthPicker label="From" value={from} min={range.start} max={to} onChange={(v) => setView({ from: v === range.start ? null : v })} />
+                    <MonthPicker label="To" value={to} min={from} max={range.end} onChange={(v) => setView({ to: v === range.end ? null : v })} />
+                  </div>
+                  <div className="seg" role="group" aria-label="Period presets">
                     <button type="button" aria-pressed={!view.from && !view.to} onClick={() => setView({ from: null, to: null })}>All years</button>
                     <button type="button" aria-pressed={view.from === last12 && !view.to} onClick={() => setView({ from: last12, to: null })}>Last 12 months</button>
-                    {yearList.map((y) => {
-                      const [a, b] = yearSpan(y);
-                      return (
-                        <button key={y} type="button" aria-pressed={!!(a || b) && view.from === a && view.to === b}
-                          onClick={() => setView({ from: a, to: b })}>{y}</button>
-                      );
-                    })}
                   </div>
-                  <p className="small">The data starts on 13 Nov {range.start.slice(0, 4)} and ends in {monthLabel(range.end)}, so {yearList[0]} and {yearList[yearList.length - 1]} are not complete years.</p>
-                  <button type="button" className="link self-start" aria-expanded={customPeriod} onClick={() => setCustomPeriod((o) => !o)}>Custom period</button>
-                  {customPeriod && (
-                    <div className="row">
-                      <MonthPicker label="From" value={from} min={range.start} max={to} onChange={(v) => setView({ from: v === range.start ? null : v })} />
-                      <MonthPicker label="To" value={to} min={from} max={range.end} onChange={(v) => setView({ to: v === range.end ? null : v })} />
-                    </div>
-                  )}
                 </>
               )}
               <label className="field">
@@ -555,18 +504,13 @@ export default function App() {
             basemap={basemap} imagery={imagery} imageryDate={windowEnd} drawMode={drawMode}
             onDrawEnd={() => setDrawMode(null)} onDrawCount={setNVerts} onSelect={(sel) => setView({ sel })}
             onPickPoint={(lat, lon) => setPoint((p) => ({ ...p, lat: lat.toFixed(4), lon: lon.toFixed(4) }))}
-            onCursor={setCursor} onView={setMapView} onClear={clearArea} finishRef={finishRef} fitAreaRef={fitAreaRef}
+            onCursor={setCursor} onView={setMapView} onClear={clearArea} finishRef={finishRef}
             awaitDrawn={booting && pointsReady && cells != null} onDrawn={() => setDrawn(true)}
           />
           <div className="infobar" aria-live="off">
             <span>{cursor ? `Lat ${cursor.lat.toFixed(3)}°, Lon ${cursor.lon.toFixed(3)}°` : "Lat –, Lon –"}</span>
             <span>Detections: {windowEnd ? `${windowStart === windowEnd ? windowEnd : `${windowStart} to ${windowEnd}`} (${windowDays} ${windowDays === 1 ? "day" : "days"})` : "–"}</span>
           </div>
-          {points.zoomIn && !drawMode && (
-            <div className="map-hint" role="status">
-              To see the fires of {windowText}, zoom in to a region or choose an area (older dates are drawn for the area on screen).
-            </div>
-          )}
           {drawMode && (
             <div className="draw-hint" role="status">
               {drawMode === "rect" && "Drag on the map to draw a rectangle. Esc cancels."}
@@ -608,8 +552,7 @@ export default function App() {
                   <div className="result-chart" role="tabpanel" aria-label={TAB_LABELS[tab]}>
                     {tab === "calendar" && (
                       <Calendar months={data.months} mode={view.mode} scale={view.scale} unit={data.meta.unit} footer={footer}
-                        onMode={(mode) => setView({ mode })} onScale={(scale) => setView({ scale })}
-                        shownMonth={shownMonth} onPickMonth={pickMonth} />
+                        onMode={(mode) => setView({ mode })} onScale={(scale) => setView({ scale })} />
                     )}
                     {tab === "seasonal" && <SeasonalProfile months={data.months} unitShort={unitShort} footer={footer} />}
                     {tab === "annual" && <AnnualTotals months={data.months} unitShort={unitShort} footer={footer} />}
