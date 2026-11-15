@@ -291,6 +291,18 @@ export default function App() {
     return [...g.entries()];
   }, [regions]);
 
+  const syncSpan = (() => {
+    if (!range || !windowStart || !windowEnd) return null;
+    const a = windowStart.slice(0, 7) < range.start ? range.start : windowStart.slice(0, 7);
+    const b = windowEnd.slice(0, 7) > range.end ? range.end : windowEnd.slice(0, 7);
+    return { from: a === range.start ? null : a, to: b === range.end ? null : b, label: a === b ? monthLabel(a) : `${monthLabel(a)} – ${monthLabel(b)}` };
+  })();
+  const synced = !!syncSpan && view.from === syncSpan.from && view.to === syncSpan.to && !!(syncSpan.from || syncSpan.to);
+  const syncWithAnalysis = () => {
+    if (!syncSpan) return;
+    setView({ from: syncSpan.from, to: syncSpan.to });
+    setOpen((o) => ({ ...o, period: true }));
+  };
   const flash = (text: string) => {
     setNotice(text);
     window.setTimeout(() => setNotice(""), 4500);
@@ -430,6 +442,17 @@ export default function App() {
                   <p className="small">Any period of up to {MAX_RANGE_DAYS} days between {firstDay} and {lastDay}. Dates before the last 7 days are drawn for the area on screen, so zoom in to a region first.</p>
                   {rangeError && <p className="error" role="alert">{rangeError}</p>}
                 </form>
+              )}
+              <div className="sync-row">
+                <button type="button" onClick={syncWithAnalysis} disabled={!syncSpan} aria-pressed={synced}
+                  title="Set the analysis period (calendar, charts and coloured squares) to the month(s) of these dates">
+                  Sync with analysis
+                </button>
+                {syncSpan && <span className="small">Analysis period → {syncSpan.label}</span>}
+              </div>
+              {synced && (
+                <p className="small sync-note">Calendar and charts now show only these months. Press <strong>All years</strong> in
+                  &quot;Analysis period &amp; downloads&quot; to go back.</p>
               )}
               <div className="layers">
                 <LayerRow on={layers.viirs} color={POINT_COLORS.viirs} kind="dot" label={`VIIRS detections · ${points.sampled ? "≈" : ""}${fmt(nViirs)}`}

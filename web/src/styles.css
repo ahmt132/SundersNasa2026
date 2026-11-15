@@ -291,3 +291,9 @@ input { width: 100%; font-family: var(--mono); }
 .share-toast.fail { background: #3a2a12; border-color: #e2b13c; color: #f7ecd6; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .share-toast { animation: none; } }
+
+/* ---------- sync the analysis period with the map dates */
+.sync-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 0 12px 10px; }
+.sync-row .small { padding: 0; }
+.sync-row button[aria-pressed="true"] { border-color: #6b86ff; background: #22337a; }
+.sync-note { padding: 0 12px 10px !important; color: var(--ink2); }
